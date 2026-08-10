@@ -1,0 +1,52 @@
+{
+  "name": "@mesadev/sdk",
+  "version": "0.44.1",
+  "description": "Official Mesa TypeScript SDK",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "stamp:version": "node scripts/stamp-version.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "pnpm run test:unit",
+    "test:unit": "pnpm run stamp:version && vitest run",
+    "clean": "rm -rf dist",
+    "build": "pnpm run stamp:version && pnpm run clean && pnpm --dir ../rest/ts run build && tsc -b tsconfig.build.json"
+  },
+  "dependencies": {
+    "@mesadev/mesafs-napi": "0.44.1",
+    "@mesadev/rest": "0.44.1",
+    "just-bash": "^2.13.0",
+    "zod": "^4.3.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mesa-dot-dev/sdks.git",
+    "directory": "typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/mesa-dot-dev/sdks/issues"
+  },
+  "homepage": "https://mesa.dev",
+  "author": "Mesa",
+  "license": "Apache-2.0"
+}
