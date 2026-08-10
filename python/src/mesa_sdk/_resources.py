@@ -599,7 +599,11 @@ class Tokens:
 
 
 class ApiKeys:
-    """API key management: ``mesa.api_keys``."""
+    """API key management: ``mesa.api_keys``.
+
+    Deprecated: prefer private keys created in the dashboard. API keys
+    remain supported for existing integrations.
+    """
 
     def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
         self._client = client
@@ -612,6 +616,11 @@ class ApiKeys:
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ListApiKeysResponse200:
+        """List the organization's API keys.
+
+        Deprecated: prefer private keys created in the dashboard. API keys
+        remain supported for existing integrations.
+        """
         resolved = await self._resolve_org(org)
         resp = await list_api_keys.asyncio_detailed(
             resolved,
@@ -631,6 +640,9 @@ class ApiKeys:
         expires_in_seconds: int | None = None,
     ) -> CreateApiKeyResponse201:
         """Mint a new API key.
+
+        Deprecated: prefer private keys created in the dashboard. API keys
+        remain supported for existing integrations.
 
         :param scopes: Permission scopes (``"read"``, ``"write"``).
             Defaults to ``["read", "write"]`` when omitted.
@@ -658,7 +670,11 @@ class ApiKeys:
     async def revoke(
         self, *, key_id: str, org: str | None = None
     ) -> RevokeApiKeyResponse200:
-        """Revoke ``key_id``. Subsequent requests using the key fail with 401."""
+        """Revoke ``key_id``. Subsequent requests using the key fail with 401.
+
+        Deprecated: prefer private keys created in the dashboard. API keys
+        remain supported for existing integrations.
+        """
         resolved = await self._resolve_org(org)
         resp = await revoke_api_key.asyncio_detailed(
             resolved,

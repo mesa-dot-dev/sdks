@@ -10,7 +10,7 @@ handles authentication, caching, and cleanup behind the scenes.
 pip install mesa-sdk
 ```
 
-Set `MESA_API_KEY` in your environment, or pass it directly:
+Set `MESA_PRIVATE_KEY` in your environment, or pass it directly:
 
 ```python
 import asyncio
@@ -18,7 +18,10 @@ from mesa_sdk import Mesa
 
 async def main():
     async with Mesa() as mesa:
-        async with mesa.fs.mount(repos=["my-repo"]) as fs:
+        async with mesa.fs.mount(
+            repos=["my-repo"],
+            authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+        ) as fs:
             data = await fs.read("/my-repo/README.md")
             print(data.decode())
 
@@ -29,8 +32,8 @@ asyncio.run(main())
 
 `mesa.fs.mount()` is an async context manager. When you enter it, the SDK:
 
-1. Signs one short-lived, repo-scoped access token (JWT) locally from your API
-   key. The token's repo scope is encoded as full `org/repo` names, so signing
+1. Signs one short-lived, repo-scoped access token (JWT) locally from your
+   private key. The token's repo scope is encoded as full `org/repo` names, so signing
    does not resolve repo names to ids over the network.
 2. Connects to the Mesa VCS backend and yields a `MesaFileSystem`.
 
@@ -41,7 +44,10 @@ does not leak indefinitely. When the context exits (normally or on error), the
 SDK flushes pending filesystem writes. There is no key to revoke.
 
 ```python
-async with mesa.fs.mount(repos=["my-repo"]) as fs:
+async with mesa.fs.mount(
+    repos=["my-repo"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
     # fs is a MesaFileSystem — use it here
     ...
 # pending writes flushed, connection closed; the token self-expires
@@ -57,13 +63,18 @@ one token with that TTL; once it expires, the mount stops authenticating, so
 pick a value that covers the work the mount will do.
 
 ```python
-# Mount for 4 hours instead of the default 1 hour
-async with mesa.fs.mount(repos=["my-repo"], ttl=14_400) as fs:
+# Mount for 4 hours
+async with mesa.fs.mount(
+    repos=["my-repo"],
+    authors=[{"name": "Mesa Bot"}],
+    ttl=14_400,
+) as fs:
     ...
 ```
 
-`ttl` defaults to `3600` (1 hour) and is capped at `86400` (24 hours). A value
-outside `1..86400` raises `InvalidOptionsError`.
+`ttl` defaults to `900` (15 minutes) and is capped at `14_400` (4 hours). A
+value outside that range raises `InvalidOptionsError`. API-key mounts keep their
+older defaults of `3600` (1 hour) up to `86400` (24 hours).
 
 ## Reading files
 

@@ -70,7 +70,7 @@ export interface BookmarkCreateArgs {
   name: string;
 }
 
-export interface BookmarkMoveArgs {
+interface BookmarkMoveArgs {
   repo: string;
   /** Name of the bookmark to move. */
   name: string;

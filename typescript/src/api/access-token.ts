@@ -47,9 +47,9 @@ const ACCESS_TOKEN_ALG = 'HS256';
 const ACCESS_TOKEN_DERIVATION_VERSION = 'v1';
 
 /** Default token lifetime when the caller does not request one. */
-export const ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 60 * 60; // 1 hour
+const ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 60 * 60; // 1 hour
 /** Hard cap on token lifetime; the server rejects anything longer at verify time. */
-export const ACCESS_TOKEN_MAX_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+const ACCESS_TOKEN_MAX_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 /** Default and maximum lifetimes accepted by the signing-key verifier. */
 const SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60; // 15 minutes
 const SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60; // 4 hours
@@ -152,7 +152,7 @@ export type OptionalRepositoryRestriction<NameField extends string, IdField exte
 
 export type ApiRepositoryRestriction = OptionalRepositoryRestriction<'repos', 'repo_ids'>;
 
-export type SignAccessTokenInput = RepositoryRestriction & {
+type SignAccessTokenInput = RepositoryRestriction & {
   /** The API key ID that signs this token; encoded into the `kid` header. */
   apiKeyId: string;
   /** The raw API key (`mesa_...`) the client holds; the signing secret is derived from it. */
@@ -164,7 +164,7 @@ export type SignAccessTokenInput = RepositoryRestriction & {
   ttlSeconds?: number;
 };
 
-export type SignedAccessToken = {
+type SignedAccessToken = {
   token: string;
   /** Exact expiry as an ISO 8601 string. */
   expiresAt: string;

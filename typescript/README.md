@@ -18,22 +18,15 @@ bun add @mesadev/sdk
 import { Mesa } from '@mesadev/sdk';
 
 const mesa = new Mesa({
-  apiKey: process.env.MESA_API_KEY,
+  privateKey: process.env.MESA_PRIVATE_KEY,
 });
 
-// Uses org inferred from /whoami
+// The organization comes from the key, so there is nothing to pass.
 const repo = await mesa.repos.create({ name: 'my-repo' });
 
-// Optional constructor org bypasses /whoami default-org resolution
-const mesaWithOrg = new Mesa({
-  apiKey: process.env.MESA_API_KEY,
-  org: 'acme',
-});
-
-await mesaWithOrg.repos.list();
-
-// Per-call org override
-await mesa.repos.list({ org: 'other-org' });
+// Somewhere you trust less, use a short-lived token instead of the key.
+const scoped = new Mesa({ auth: { accessToken } });
+await scoped.repos.list();
 
 console.log(repo.name);
 ```
@@ -44,13 +37,32 @@ This package exposes org-inferred REST resources under `mesa.*`.
 
 `Mesa` accepts:
 
-- `apiKey?: string` (falls back to `MESA_API_KEY` in Node)
+- `privateKey?: string` (falls back to `MESA_PRIVATE_KEY` in Node)
+- `auth?: { privateKey } | { accessToken }`
+- `apiKey?: string` (deprecated in favor of private keys, but still fully supported; falls back to `MESA_API_KEY` in Node)
 - `apiUrl?: string` (defaults to `https://api.mesa.dev/v1`)
 - `vcsUrl?: string` (optional VCS gateway override; only use when self-hosting Mesa)
-- `org?: string` (optional default org; bypasses `/whoami` resolution)
+- `org?: string` (optional default org; with a private key or access token it has to match the org the credential already names)
 - `fetch?: typeof fetch`
 - `userAgent?: string`
 - `webhookSecret?: string` (used by `mesa.webhooks.receive(...)`)
+
+Pass exactly one credential. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential; an API-key client resolves it from `/whoami` unless you pass `org`.
+
+### Scoped access tokens
+
+Mint a token in your trusted process and hand only that token to the sandbox or job that needs it:
+
+```ts
+const { token } = await mesa.tokens.create({
+  authors: [{ name: 'Mesa Bot', email: 'mesa-bot@example.com' }],
+  scopes: ['read', 'write'],
+  repos: ['acme/agent-workspace'],
+  ttl_seconds: 60 * 60, // 1 hour
+});
+```
+
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Minting from an API key still works and keeps its older limits of 1 hour by default, up to 24 hours.
 
 ## Webhook Handlers
 
@@ -63,7 +75,7 @@ import { Hono } from 'hono';
 import { Mesa } from '@mesadev/sdk';
 
 const mesa = new Mesa({
-  apiKey: process.env.MESA_API_KEY,
+  privateKey: process.env.MESA_PRIVATE_KEY,
   webhookSecret: process.env.MESA_WEBHOOK_SECRET,
 });
 

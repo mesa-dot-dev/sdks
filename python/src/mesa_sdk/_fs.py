@@ -561,7 +561,7 @@ class LayoutDefinition:
         self._authors = authors
 
     def layout(self) -> Layout:
-        """The prepared layout: :meth:`FsNamespace.create_layout` output, or the layout passed in."""
+        """The prepared layout, built from the raw path map the definition was given."""
         return self._layout
 
     def mount(

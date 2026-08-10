@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 const NATIVE_PACKAGE_NAME = '@mesadev/mesafs-napi';
 
-export interface NativeTelemetryConfig {
+interface NativeTelemetryConfig {
   logLevel?: string;
 }
 
@@ -20,7 +20,7 @@ export interface NativeLogRecord {
  */
 export type NativeRevisionIdentifier = { bookmark: string; changeId?: never } | { bookmark?: never; changeId: string };
 
-export interface NativeMountRevisionProperties {
+interface NativeMountRevisionProperties {
   bookmark?: string;
   describe?: string | null;
 }
@@ -146,7 +146,7 @@ export interface NativeModule {
 function createMissingNativeAddonError(cause: unknown): Error {
   return new Error(
     `Unable to load mesafs-napi native addon. ` +
-      `Build the local native package with pnpm --dir packages/rust/crates/mesafs-napi run build ` +
+      `Build the local native package with pnpm --dir crates/mesafs-napi run build ` +
       `or install ${NATIVE_PACKAGE_NAME}.`,
     { cause }
   );

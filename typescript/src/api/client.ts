@@ -20,7 +20,7 @@ export type RestRequestOptions<TData extends RestDataShape> = Simplify<
   Omit<RestOptions<TData, boolean>, 'baseUrl' | 'fetch' | 'headers' | 'responseStyle' | 'throwOnError'>
 >;
 
-export type RestClientConfig = {
+type RestClientConfig = {
   /** Bearer credential, or a local signer that returns one for each request. */
   credential: string | (() => string);
   apiUrl: string;

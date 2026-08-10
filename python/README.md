@@ -16,10 +16,11 @@ pip install mesa-sdk
 
 ```python
 import asyncio
+import os
 from mesa_sdk import Mesa
 
 async def main():
-    async with Mesa(api_key="mk_...") as mesa:
+    async with Mesa(private_key=os.environ["MESA_PRIVATE_KEY"]) as mesa:
         repos = await mesa.repos.list()
         print(repos)
 
@@ -28,22 +29,37 @@ asyncio.run(main())
 
 ## Usage
 
-### Org Resolution
+### Authentication
 
-The SDK resolves your default organization automatically via `/whoami` on first use. You can bypass this by passing `org` to the constructor or overriding per-call:
+A signing private key belongs in a process you trust. Give anything less trusted, such as a sandbox or a worker running agent-generated code, a short-lived access token instead:
 
 ```python
-# Default: org inferred from /whoami (lazy, cached)
-mesa = Mesa(api_key="mk_...")
-repos = await mesa.repos.list()
+# On a trusted host, where the private key lives.
+mesa = Mesa(private_key=os.environ["MESA_PRIVATE_KEY"])
 
-# Constructor org bypasses /whoami entirely
-mesa = Mesa(api_key="mk_...", org="acme")
-repos = await mesa.repos.list()
+# Anywhere you were handed a token; the SDK forwards it unchanged.
+scoped = Mesa(auth={"access_token": access_token})
 
-# Per-call override
-repos = await mesa.repos.list(org="other-org")
+# API keys are deprecated in favor of private keys, but still fully supported.
+compatible = Mesa(api_key=os.environ["MESA_API_KEY"], org="acme")
 ```
+
+Pass exactly one of `private_key`, `auth`, or `api_key`. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential; an API-key client resolves it from `/whoami` unless you pass `org`.
+
+#### Scoped access tokens
+
+Mint a token in your trusted process and hand only that token to the sandbox or job that needs it:
+
+```python
+minted = await mesa.tokens.create(
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+    scopes=["read", "write"],
+    repos=["acme/agent-workspace"],
+    ttl_seconds=60 * 60,  # 1 hour
+)
+```
+
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Minting from an API key still works and keeps its older limits of 1 hour by default, up to 24 hours.
 
 ### Repositories
 
@@ -70,21 +86,27 @@ await mesa.repos.delete(repo="my-repo")
 bookmarks = await mesa.bookmarks.list(repo="my-repo")
 await mesa.bookmarks.create(repo="my-repo", name="feature-x", change_id="abc123")
 await mesa.bookmarks.move(repo="my-repo", bookmark="feature-x", change_id="def456")
-await mesa.bookmarks.merge(repo="my-repo", source="feature-x", target="main", message="Merge feature-x into main")
+await mesa.bookmarks.merge(
+    repo="my-repo",
+    source="feature-x",
+    target="main",
+    message="Merge feature-x into main",
+    authors=[{"name": "Alice", "email": "alice@example.com"}],
+)
 await mesa.bookmarks.delete(repo="my-repo", bookmark="feature-x")
 ```
 
 ### Changes
 
 ```python
-from mesa_sdk import Author, FileUpsert
+from mesa_sdk import FileUpsert
 
 changes = await mesa.changes.list(repo="my-repo")
 change = await mesa.changes.create(
     repo="my-repo",
     base_change_id="abc123",
     message="Add feature",
-    author=Author(name="Alice", email="alice@example.com"),
+    authors=[{"name": "Alice", "email": "alice@example.com"}],
     files=[FileUpsert(path="hello.txt", content="Hello, world!")],
 )
 change = await mesa.changes.get(repo="my-repo", change_id="def456")
@@ -129,7 +151,7 @@ from fastapi import FastAPI, Request
 from mesa_sdk import Mesa
 
 app = FastAPI()
-mesa = Mesa(api_key="mk_...", org="acme", webhook_secret="whsec_...")
+mesa = Mesa(private_key=os.environ["MESA_PRIVATE_KEY"], webhook_secret="whsec_...")
 
 mesa.webhooks.on("push", lambda event: print(event["data"]["updates"]))
 
@@ -144,10 +166,13 @@ async def mesa_webhook(request: Request):
 Mount repositories as a local filesystem for direct file I/O. The `mount()` context manager handles setup and teardown automatically.
 
 ```python
-async with mesa.fs.mount(repos=["my-repo"]) as fs:
-    data = await fs.read("/my-repo/src/main.py")
-    await fs.write("/my-repo/src/new_file.py", b"print('hello')")
-    entries = await fs.readdir("/my-repo/src")
+async with mesa.fs.mount(
+    repos=["my-repo"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
+    data = await fs.read("/my-org/my-repo/src/main.py")
+    await fs.write("/my-org/my-repo/src/new_file.py", b"print('hello')")
+    entries = await fs.readdir("/my-org/my-repo/src")
 ```
 
 ### Read-only Repos
@@ -157,8 +182,11 @@ Pass `RepoConfig(..., mode="ro")` to mount a repo read-only. Writes to it raise 
 ```python
 from mesa_sdk import RepoConfig
 
-async with mesa.fs.mount(repos=[RepoConfig("my-repo", mode="ro")]) as fs:
-    data = await fs.read("/my-repo/README.md")
+async with mesa.fs.mount(
+    repos=[RepoConfig("my-repo", mode="ro")],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
+    data = await fs.read("/my-org/my-repo/README.md")
 ```
 
 ### Multiple Repos
@@ -166,7 +194,10 @@ async with mesa.fs.mount(repos=[RepoConfig("my-repo", mode="ro")]) as fs:
 Mount several repositories at once. Each repo appears as a top-level directory.
 
 ```python
-async with mesa.fs.mount(repos=["repo-a", "repo-b"]) as fs:
+async with mesa.fs.mount(
+    repos=["repo-a", "repo-b"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
     a = await fs.read("/repo-a/file.txt")
     b = await fs.read("/repo-b/file.txt")
 ```
@@ -178,11 +209,14 @@ Use `RepoConfig` with `at` to pin a mount to a specific bookmark or change.
 ```python
 from mesa_sdk import RepoConfig
 
-async with mesa.fs.mount(repos=[
-    RepoConfig("my-repo", at={"bookmark": "feature-x"}),
-    RepoConfig("other-repo", at={"change_id": "abc123"}),
-]) as fs:
-    data = await fs.read("/my-repo/file.txt")
+async with mesa.fs.mount(
+    repos=[
+        RepoConfig("my-repo", at={"bookmark": "feature-x"}),
+        RepoConfig("other-repo", at={"change_id": "abc123"}),
+    ],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
+    data = await fs.read("/my-org/my-repo/file.txt")
 ```
 
 ### Bash
@@ -190,8 +224,11 @@ async with mesa.fs.mount(repos=[
 Run shell commands inside the mounted filesystem with `fs.bash()`.
 
 ```python
-async with mesa.fs.mount(repos=["my-repo"]) as fs:
-    bash = fs.bash(env={"FOO": "bar"}, cwd="/my-repo", timeout_ms=30000)
+async with mesa.fs.mount(
+    repos=["my-repo"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
+    bash = fs.bash(env={"FOO": "bar"}, cwd="/my-org/my-repo", timeout_ms=30000)
     result = await bash.exec("ls -la")
     print(result.stdout, result.stderr, result.exit_code)
 ```
@@ -203,7 +240,10 @@ async with mesa.fs.mount(repos=["my-repo"]) as fs:
 Create and manage changes and bookmarks directly from a mounted filesystem.
 
 ```python
-async with mesa.fs.mount(repos=["my-repo"]) as fs:
+async with mesa.fs.mount(
+    repos=["my-repo"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+) as fs:
     # Changes
     change = await fs.changes.new("my-repo", bookmark="main")
     change = await fs.changes.edit("my-repo", change_id="abc123")
@@ -225,9 +265,10 @@ from mesa_sdk import DiskCacheConfig
 
 async with mesa.fs.mount(
     repos=["my-repo"],
+    authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
     disk_cache=DiskCacheConfig(path="/tmp/mesa-cache", max_size_bytes=1_000_000_000),
 ) as fs:
-    data = await fs.read("/my-repo/file.txt")
+    data = await fs.read("/my-org/my-repo/file.txt")
 ```
 
 ### Filesystem Errors
@@ -265,10 +306,12 @@ response = await list_repos.asyncio_detailed("acme", client=client)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `api_key` | `str \| None` | `MESA_API_KEY` env var | API key for authentication |
+| `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Signing private key for trusted processes |
+| `auth` | `MesaAuth \| None` | `None` | A private key or an access token, passed as one object |
+| `api_key` | `str \| None` | `MESA_API_KEY` env var | API key, deprecated in favor of private keys but still supported |
 | `api_url` | `str` | `https://api.mesa.dev/v1` | Base URL for the Mesa API |
 | `vcs_url` | `str \| None` | `None` | Optional VCS gateway override. Only use when self-hosting Mesa. |
-| `org` | `str \| None` | Resolved from `/whoami` | Default organization slug |
+| `org` | `str \| None` | Read from the credential, or `/whoami` | Default organization slug |
 | `user_agent` | `str \| None` | `None` | Custom user agent suffix |
 | `webhook_secret` | `str \| None` | `None` | Secret used by `mesa.webhooks.receive(...)` |
 
@@ -285,13 +328,13 @@ async with Mesa() as mesa:
     except NotFoundError:
         print("Repo not found")
     except AuthenticationError:
-        print("Invalid API key")
+        print("Invalid credential")
 ```
 
 | Exception | HTTP Status | Description |
 |-----------|-------------|-------------|
 | `ValidationError` | 400, 406 | Invalid request parameters |
-| `AuthenticationError` | 401 | Invalid or missing API key |
+| `AuthenticationError` | 401 | Invalid or missing credential |
 | `AuthorizationError` | 403 | Insufficient permissions |
 | `NotFoundError` | 404 | Resource not found |
 | `ConflictError` | 409 | Resource conflict |

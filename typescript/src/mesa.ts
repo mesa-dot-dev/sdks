@@ -114,7 +114,9 @@ function getAccessTokenOrg(token: string): string {
 /**
  * Resolve one explicit or environment credential. Explicit credentials never
  * combine, and the existing API-key environment variable remains authoritative
- * during migration when both environment variables are set.
+ * during migration when both environment variables are set. The `MESA_API_KEY`
+ * fallback is deprecated in favor of `MESA_PRIVATE_KEY`; its precedence is
+ * unchanged so existing environments keep working.
  */
 function resolveCredential(options: MesaOptions): ResolvedCredential {
   const explicitCredentialCount = [options.apiKey, options.privateKey, options.auth].filter(
@@ -236,7 +238,10 @@ type MesaChanges<TOptions extends MesaOptions> = CredentialSpecific<
 >;
 
 export interface MesaOptions {
-  /** Long-lived API key (`mesa_...`) used directly for requests and to sign short-lived access tokens locally. */
+  /**
+   * Long-lived API key (`mesa_...`) used directly for requests and to sign short-lived access tokens locally.
+   * @deprecated Use `privateKey` instead. API keys remain supported for existing integrations.
+   */
   apiKey?: string;
   /** Organization-root Ed25519 private key used to sign REST request JWTs and `tokens.create()` locally. */
   privateKey?: string;
@@ -244,6 +249,10 @@ export interface MesaOptions {
   auth?: MesaAuth;
   apiUrl?: string;
   vcsUrl?: string;
+  /**
+   * @deprecated The organization is derived from the private key or access
+   * token. Only API-key clients (also deprecated) need it.
+   */
   org?: string;
   fetch?: typeof globalThis.fetch;
   userAgent?: string;
@@ -336,6 +345,11 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
   readonly vcsUrl: string;
   readonly org: ApiResources['org'];
   readonly tokens: MesaTokens<TOptions>;
+  /**
+   * @deprecated Manage API keys from the dashboard and authenticate new
+   * integrations with private keys instead. API keys remain supported for
+   * existing integrations.
+   */
   readonly apiKeys: ApiResources['apiKeys'];
   readonly repos: ApiResources['repos'];
   readonly content: ApiResources['content'];

@@ -1,4 +1,4 @@
-export type RepoTagEqFilter = {
+type RepoTagEqFilter = {
   $eq: string;
   $in?: never;
   $contains?: never;
@@ -7,7 +7,7 @@ export type RepoTagEqFilter = {
   $exists?: never;
 };
 
-export type RepoTagInFilter = {
+type RepoTagInFilter = {
   $eq?: never;
   $in: string[];
   $contains?: never;
@@ -16,7 +16,7 @@ export type RepoTagInFilter = {
   $exists?: never;
 };
 
-export type RepoTagContainsFilter = {
+type RepoTagContainsFilter = {
   $eq?: never;
   $in?: never;
   $contains: string;
@@ -25,7 +25,7 @@ export type RepoTagContainsFilter = {
   $exists?: never;
 };
 
-export type RepoTagStartsWithFilter = {
+type RepoTagStartsWithFilter = {
   $eq?: never;
   $in?: never;
   $contains?: never;
@@ -34,7 +34,7 @@ export type RepoTagStartsWithFilter = {
   $exists?: never;
 };
 
-export type RepoTagEndsWithFilter = {
+type RepoTagEndsWithFilter = {
   $eq?: never;
   $in?: never;
   $contains?: never;
@@ -43,7 +43,7 @@ export type RepoTagEndsWithFilter = {
   $exists?: never;
 };
 
-export type RepoTagExistsFilter = {
+type RepoTagExistsFilter = {
   $eq?: never;
   $in?: never;
   $contains?: never;

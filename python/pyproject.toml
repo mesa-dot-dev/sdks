@@ -48,7 +48,7 @@ dev = [
 ]
 
 [tool.maturin]
-manifest-path = "../../rust/crates/mesafs-py/Cargo.toml"
+manifest-path = "../../../crates/mesafs-py/Cargo.toml"
 python-source = "src"
 module-name = "mesa_sdk._native"
 

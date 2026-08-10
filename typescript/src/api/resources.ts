@@ -94,12 +94,12 @@ import {
   type SigningKeyAuthorInput,
 } from './access-token.js';
 import type { RestClient } from './client.js';
-import { serializeRepoTagsFilter, type RepoTagFilter, type RepoTagValueFilter } from './repo-tag-filter.js';
+import { serializeRepoTagsFilter, type RepoTagFilter } from './repo-tag-filter.js';
 
-export const SIGNATURE_HEADER = 'x-mesa-signature';
+const SIGNATURE_HEADER = 'x-mesa-signature';
 const WEBHOOK_TOLERANCE_SECONDS = 300;
 
-export function sign(secret: string, timestamp: number, rawBody: string): string {
+function sign(secret: string, timestamp: number, rawBody: string): string {
   return createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
 }
 
@@ -121,9 +121,12 @@ type OrgRequestContext = {
   requestAttribution: RequestAttribution;
 };
 
-export type ApiKeysListInput = { org?: string };
-export type ApiKeysCreateInput = CreateApiKeyData['body'] & { org?: string };
-export type ApiKeysRevokeInput = Omit<RevokeApiKeyData['path'], 'org'> & { org?: string };
+/** @deprecated Part of the API-key management surface; prefer private keys created in the dashboard. */
+type ApiKeysListInput = { org?: string };
+/** @deprecated Part of the API-key management surface; prefer private keys created in the dashboard. */
+type ApiKeysCreateInput = CreateApiKeyData['body'] & { org?: string };
+/** @deprecated Part of the API-key management surface; prefer private keys created in the dashboard. */
+type ApiKeysRevokeInput = Omit<RevokeApiKeyData['path'], 'org'> & { org?: string };
 
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
 
@@ -137,7 +140,11 @@ type TokensCreateBase = ApiRepositoryRestriction & {
   org?: string;
 };
 
-/** Existing `tokens.create()` input for API-key clients. */
+/**
+ * Existing `tokens.create()` input for API-key clients. Applies only to the
+ * deprecated API-key path; private-key clients use
+ * {@link TokensCreatePrivateKeyInput}.
+ */
 export type TokensCreateLegacyInput = TokensCreateBase & {
   /** Token lifetime in seconds (1..86400). Defaults to 3600. */
   ttl_seconds?: number;
@@ -162,40 +169,38 @@ export type TokensCreateResponse = RepositoryRestriction<'repos', 'repo_ids'> & 
   scopes: string[];
 };
 
-export type { RepoTagFilter, RepoTagValueFilter };
-export type ReposListInput = Omit<NonNullable<ListReposData['query']>, 'tags'> & {
+type ReposListInput = Omit<NonNullable<ListReposData['query']>, 'tags'> & {
   org?: string;
   /** Structured tag filter object. Legacy strings are accepted for existing callers. */
   tags?: RepoTagFilter | string;
 };
-export type ReposCreateInput = CreateRepoData['body'] & { org?: string };
-export type ReposGetInput = Omit<GetRepoData['path'], 'org'> & { org?: string };
-export type ReposUpdateInput = Omit<UpdateRepoData['path'], 'org'> & UpdateRepoData['body'] & { org?: string };
-export type ReposDeleteInput = Omit<DeleteRepoData['path'], 'org'> & { org?: string };
-export type SyncRefGlobs = { branches: string; tags: string };
-export type SyncRefGlobsInput = { branches: string; tags?: string } | { branches?: string; tags: string };
-export type ReposSyncUpstreamInput = Omit<SyncUpstreamData['path'], 'org'> &
+type ReposCreateInput = CreateRepoData['body'] & { org?: string };
+type ReposGetInput = Omit<GetRepoData['path'], 'org'> & { org?: string };
+type ReposUpdateInput = Omit<UpdateRepoData['path'], 'org'> & UpdateRepoData['body'] & { org?: string };
+type ReposDeleteInput = Omit<DeleteRepoData['path'], 'org'> & { org?: string };
+type SyncRefGlobsInput = { branches: string; tags?: string } | { branches?: string; tags: string };
+type ReposSyncUpstreamInput = Omit<SyncUpstreamData['path'], 'org'> &
   Omit<SyncUpstreamData['body'], 'ref_globs'> & { org?: string; ref_globs?: SyncRefGlobsInput | undefined };
-export type ReposGetUpstreamSyncInput = Omit<GetRepoUpstreamSyncData['path'], 'org'> & { org?: string };
-export type ReposListUpstreamSyncsInput = Omit<ListRepoUpstreamSyncsData['path'], 'org'> &
+type ReposGetUpstreamSyncInput = Omit<GetRepoUpstreamSyncData['path'], 'org'> & { org?: string };
+type ReposListUpstreamSyncsInput = Omit<ListRepoUpstreamSyncsData['path'], 'org'> &
   NonNullable<ListRepoUpstreamSyncsData['query']> & { org?: string };
 
-export type ContentGetInput = Omit<GetContentData['path'], 'org'> &
+type ContentGetInput = Omit<GetContentData['path'], 'org'> &
   NonNullable<GetContentData['query']> & {
     org?: string;
   };
 
-export type BookmarksListInput = Omit<ListBookmarksData['path'], 'org'> &
+type BookmarksListInput = Omit<ListBookmarksData['path'], 'org'> &
   NonNullable<ListBookmarksData['query']> & {
     org?: string;
   };
-export type BookmarksGetInput = Omit<GetBookmarkData['path'], 'org'> & { org?: string };
-export type BookmarksCreateInput = Omit<CreateBookmarkData['path'], 'org'> &
+type BookmarksGetInput = Omit<GetBookmarkData['path'], 'org'> & { org?: string };
+type BookmarksCreateInput = Omit<CreateBookmarkData['path'], 'org'> &
   CreateBookmarkData['body'] & {
     org?: string;
   };
-export type BookmarksDeleteInput = Omit<DeleteBookmarkData['path'], 'org'> & { org?: string };
-export type BookmarksMoveInput = Omit<MoveBookmarkData['path'], 'org'> &
+type BookmarksDeleteInput = Omit<DeleteBookmarkData['path'], 'org'> & { org?: string };
+type BookmarksMoveInput = Omit<MoveBookmarkData['path'], 'org'> &
   MoveBookmarkData['body'] & {
     org?: string;
   };
@@ -224,7 +229,7 @@ type NoCommitAttribution = {
 export type PrivateKeyBookmarksMergeInput = BookmarksMergeInput & SigningKeyCommitAttribution;
 export type FixedTokenBookmarksMergeInput = BookmarksMergeInput & NoCommitAttribution;
 
-export type ChangesListInput = Omit<ListChangesData['path'], 'org'> &
+type ChangesListInput = Omit<ListChangesData['path'], 'org'> &
   NonNullable<ListChangesData['query']> & {
     org?: string;
   };
@@ -262,7 +267,7 @@ type ChangesCreateWithoutFiles = ChangesCreateBase & {
  * This type enforces that constraint at compile time.
  */
 export type ChangesCreateInput = ChangesCreateWithFiles | ChangesCreateWithoutFiles;
-export type ChangesGetInput = Omit<GetChangeData['path'], 'org'> & { org?: string };
+type ChangesGetInput = Omit<GetChangeData['path'], 'org'> & { org?: string };
 export type ChangesPatchInput = Omit<UpdateChangeData['path'], 'org'> &
   UpdateChangeData['body'] & {
     org?: string;
@@ -284,20 +289,19 @@ export type PrivateKeyChangesPatchInput =
     });
 export type FixedTokenChangesPatchInput = Omit<ChangesPatchInput, 'author'> & NoCommitAttribution;
 
-export type DiffsGetInput = Omit<GetDiffData['path'], 'org'> & NonNullable<GetDiffData['query']> & { org?: string };
+type DiffsGetInput = Omit<GetDiffData['path'], 'org'> & NonNullable<GetDiffData['query']> & { org?: string };
 
-export type WebhookTargetsListInput = NonNullable<ListWebhookTargetsData['query']> & { org?: string };
-export type WebhookTargetsCreateInput = CreateWebhookTargetData['body'] & {
+type WebhookTargetsListInput = NonNullable<ListWebhookTargetsData['query']> & { org?: string };
+type WebhookTargetsCreateInput = CreateWebhookTargetData['body'] & {
   org?: string;
 };
-export type WebhookTargetsUpdateInput = Omit<UpdateWebhookTargetData['path'], 'org'> &
+type WebhookTargetsUpdateInput = Omit<UpdateWebhookTargetData['path'], 'org'> &
   UpdateWebhookTargetData['body'] & {
     org?: string;
   };
-export type WebhookTargetsDeleteInput = Omit<DeleteWebhookTargetData['path'], 'org'> & { org?: string };
+type WebhookTargetsDeleteInput = Omit<DeleteWebhookTargetData['path'], 'org'> & { org?: string };
 
-export type OrgGetInput = { org?: string };
-export type WhoAmIInput = Record<never, never>;
+type OrgGetInput = { org?: string };
 
 type RuntimeAttributionInput = {
   author?: unknown;
@@ -384,16 +388,24 @@ export function createApiResources({
       /** Sign locally with an API key or private key. Static access-token clients cannot mint another token. */
       create: (input: TokensCreateInput = {}) => signToken(input),
     },
+    /**
+     * @deprecated Manage API keys from the dashboard and authenticate new
+     * integrations with private keys instead. API keys remain supported for
+     * existing integrations.
+     */
     apiKeys: {
+      /** @deprecated Prefer private keys created in the dashboard. */
       list: async (input: ApiKeysListInput = {}): Promise<ListApiKeysResponse> => {
         const org = await resolveOrg(input.org);
         return restClient.request(listApiKeys, { path: { org } });
       },
+      /** @deprecated Prefer private keys created in the dashboard. */
       create: async (input: ApiKeysCreateInput): Promise<CreateApiKeyResponse> => {
         const { org: overrideOrg, ...body } = input;
         const org = await resolveOrg(overrideOrg);
         return restClient.request(createApiKey, { path: { org }, body });
       },
+      /** @deprecated Prefer private keys created in the dashboard. */
       revoke: async (input: ApiKeysRevokeInput): Promise<RevokeApiKeyResponse> => {
         const { id, org: overrideOrg } = input;
         const org = await resolveOrg(overrideOrg);

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Remove top-level `RepoConfig.bookmark`, `RepoConfig.change_id`, and `RepoConfig.read_only`. Use `at` and `mode` instead
 - **Breaking:** `RepoConfig.mode` is now a `MountMode` enum (`MountMode.rw` / `MountMode.ro`); the strings `"rw"` / `"ro"` remain accepted. The public `MountMode` name is this enum (layout JSON still uses `"ro"` / `"rw"` string literals)
 - **Breaking:** Resolve `fs.changes.new(..., bookmark=...)` (and `edit` / mount `at={"bookmark": ...}`) strictly against `refs/heads/<name>`. A string that is not a bookmark no longer falls through server-side revspec resolution to a change id; pass `change_id` to fork from a change
+- Deprecate the `api_key` client option, the `MESA_API_KEY` environment fallback, and the `api_keys` resource in favor of private keys, and the `org` client option (the organization is derived from the credential); API keys remain supported
 
 ### Added
 

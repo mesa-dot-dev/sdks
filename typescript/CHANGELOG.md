@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Resolve the organization for `auth.accessToken` locally from its JWT issuer and reject opaque or malformed tokens instead of making an implicit `/whoami` request
 - Limit signing-key token and commit attribution to 100 ordered authors
+- Deprecate the `apiKey` client option, the `MESA_API_KEY` environment fallback, and the `apiKeys` resource in favor of private keys, and the `org` client option (the organization is derived from the credential); API keys remain supported
 - Change native addon loading to fail with the actionable `Unable to load mesafs-napi native addon` error (original failure attached as `cause`) when the package is installed but no platform binary is present
 
 ### Added

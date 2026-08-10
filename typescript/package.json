@@ -36,7 +36,7 @@
     "@mesadev/mesafs-napi": "0.44.1",
     "@mesadev/rest": "0.44.1",
     "just-bash": "^2.13.0",
-    "zod": "^4.3.6"
+    "zod": "catalog:"
   },
   "repository": {
     "type": "git",

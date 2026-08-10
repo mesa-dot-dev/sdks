@@ -5,14 +5,12 @@ const OrganizationSchema = z.object({
   slug: z.string(),
   name: z.string(),
 });
-export type Organization = z.infer<typeof OrganizationSchema>;
 
 const RepositorySchema = z.object({
   id: z.string(),
   name: z.string(),
   url: z.string(),
 });
-export type Repository = z.infer<typeof RepositorySchema>;
 
 const RepoInfoSchema = z.object({
   id: z.string(),
@@ -172,14 +170,10 @@ const SyncFailedInfoSchema = SyncBaseSchema.extend({
   finished_at: z.string(),
 });
 
-export const SyncQueuedPayloadSchema = z.object({ sync: SyncQueuedInfoSchema });
-export const SyncInProgressPayloadSchema = z.object({ sync: SyncInProgressInfoSchema });
-export const SyncCompletedPayloadSchema = z.object({ sync: SyncCompletedInfoSchema });
-export const SyncFailedPayloadSchema = z.object({ sync: SyncFailedInfoSchema });
-export type SyncQueuedPayload = z.infer<typeof SyncQueuedPayloadSchema>;
-export type SyncInProgressPayload = z.infer<typeof SyncInProgressPayloadSchema>;
-export type SyncCompletedPayload = z.infer<typeof SyncCompletedPayloadSchema>;
-export type SyncFailedPayload = z.infer<typeof SyncFailedPayloadSchema>;
+const SyncQueuedPayloadSchema = z.object({ sync: SyncQueuedInfoSchema });
+const SyncInProgressPayloadSchema = z.object({ sync: SyncInProgressInfoSchema });
+const SyncCompletedPayloadSchema = z.object({ sync: SyncCompletedInfoSchema });
+const SyncFailedPayloadSchema = z.object({ sync: SyncFailedInfoSchema });
 
 const WebhookEnvelopeBaseSchema = z.object({
   id: z.string(),

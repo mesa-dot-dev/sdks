@@ -225,8 +225,11 @@ class Mesa:
         """Construct a Mesa client.
 
         :param api_key: Long-lived API key (``mesa_...``). Falls back to the
-            ``MESA_API_KEY`` environment variable. API-key clients sign access
-            tokens locally and transparently mint filesystem credentials.
+            ``MESA_API_KEY`` environment variable (the fallback is deprecated
+            alongside the parameter). API-key clients sign access tokens
+            locally and transparently mint filesystem credentials.
+            Deprecated: use ``private_key`` instead. API keys remain
+            supported for existing integrations.
         :param private_key: Organization-bound Ed25519 private key used to
             sign fresh request and filesystem credentials locally. Falls back
             to the ``MESA_PRIVATE_KEY`` environment variable.
@@ -237,6 +240,8 @@ class Mesa:
             Set this only when gRPC is served from a different origin.
         :param org: Default organization slug. When omitted, read locally from
             a private key or access token, or resolved lazily for an API key.
+            Deprecated: the organization is derived from the private key or
+            access token. Only API-key clients (also deprecated) need it.
         :param user_agent: Custom ``User-Agent`` header.
         :param webhook_secret: Secret used by ``mesa.webhooks.receive(...)``.
 
