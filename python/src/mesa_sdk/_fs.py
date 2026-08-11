@@ -540,8 +540,7 @@ class LayoutDefinition:
         sandbox.upload_file("layout.json", str(definition.layout()))
         token = (await definition.token()).token
         # MESA_ORG names the CLI's organization; the token is only the
-        # credential. Leave MESA_API_KEY and MESA_ORGS unset; both outrank
-        # MESA_ACCESS_TOKEN.
+        # credential.
         sandbox.exec(
             "mesa mount --layout=layout.json",
             env={"MESA_ORG": "my-org", "MESA_ACCESS_TOKEN": token},
@@ -598,8 +597,7 @@ class FsNamespace:
         Applies the exact derivation the layout mount uses: repositories
         collected from every declaration and scoped by name, read-only
         scopes when every mode is ``"ro"``, read/write otherwise. Signing is
-        local, but the first mint on a fresh client may resolve the API key
-        id over the network (``GET /whoami`` when uncached).
+        entirely local.
 
         Authors and ``ttl`` are validated against the client's credential at
         definition time, in :meth:`__call__`.
@@ -674,11 +672,11 @@ class FsNamespace:
     ) -> AsyncIterator[MesaFileSystem]:
         """Mount repositories at their canonical ``/org/repo`` paths.
 
-        API-key and private-key clients sign one short-lived, repo-scoped access
-        token locally and use it for the lifetime of the mount. Existing
-        access-token clients forward that token unchanged. Once the token
-        expires the mount stops authenticating, so choose a ``ttl`` that covers
-        the mount's work. Layouts mount through a definition instead:
+        Private-key clients sign one short-lived, repo-scoped access token
+        locally and use it for the lifetime of the mount. Existing access-token
+        clients forward that token unchanged. Once the token expires the mount
+        stops authenticating, so choose a ``ttl`` that covers the mount's work.
+        Layouts mount through a definition instead:
         ``mesa.fs(layout={...}).mount()``.
 
         Example::
@@ -705,9 +703,9 @@ class FsNamespace:
             branching and read-only control enforced by the daemon.
         :param authors: Ordered, nonempty commit attribution required for a
             private-key mount. Other credential types do not accept it.
-        :param ttl: Access-token lifetime in seconds. API-key mounts default to
-            3600 and allow up to 86400. Private-key mounts default to 900 and
-            allow up to 14400. It cannot be set for an existing access token.
+        :param ttl: Access-token lifetime in seconds. Private-key mounts default
+            to 900 and allow up to 14400. It cannot be set for an existing
+            access token.
         :param disk_cache: Optional on-disk cache placement. When
             ``None``, only the in-memory cache is used.
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from collections.abc import Mapping
@@ -10,7 +9,6 @@ from urllib.parse import urlparse
 
 from mesa_rest.api.org import whoami as whoami_api
 
-from mesa_sdk._access_token import sign_legacy_access_token
 from mesa_sdk._signing_key import (
     NormalizedSigningKeyAuthors,
     PrivateKeyCredential,
@@ -37,13 +35,7 @@ from mesa_sdk._resources import (
     WebhookTargets,
 )
 from mesa_sdk._webhooks import Webhooks
-from mesa_sdk.errors import (
-    ApiError,
-    InvalidApiUrlError,
-    InvalidOptionsError,
-    MissingCredentialError,
-    OrgResolutionError,
-)
+from mesa_sdk.errors import InvalidApiUrlError, InvalidOptionsError, MissingCredentialError
 from mesa_sdk.types import MesaAuth, SigningKeyAuthor
 
 if TYPE_CHECKING:
@@ -51,11 +43,8 @@ if TYPE_CHECKING:
     from mesa_rest.models.whoami_response_200 import WhoamiResponse200
 
 DEFAULT_API_URL = "https://api.mesa.dev/v1"
-API_KEY_ENV_VAR = "MESA_API_KEY"
 PRIVATE_KEY_ENV_VAR = "MESA_PRIVATE_KEY"
-#: Default scopes for ``tokens.create()`` and for MesaFS mount tokens. The
-#: server clamps API-key tokens to the key's actual scopes at verify time,
-#: so requesting the full set just means "as much as this key allows".
+#: Default scopes for ``tokens.create()`` and MesaFS mount tokens.
 DEFAULT_TOKEN_SCOPES = ["read", "write"]
 
 
@@ -77,33 +66,20 @@ def _normalize_bearer_credential(credential: object) -> str:
         )
     if re.match(r"^Bearer\s+", normalized, flags=re.IGNORECASE):
         raise InvalidOptionsError(
-            "Pass only the token or API key value, without the `Bearer` scheme."
+            "Pass only the access token value, without the `Bearer` scheme."
         )
     return normalized
 
 
 def _resolve_credential(
     *,
-    api_key: str | None,
     private_key: str | None,
     auth: Mapping[str, object] | None,
 ) -> _ResolvedCredential:
-    """Resolve exactly one explicit or environment credential.
-
-    The established API-key argument and environment variable keep their
-    legacy blank-value fallback behavior. A non-empty API key remains
-    authoritative when both environment variables are present.
-    """
-    effective_api_key = (
-        None if isinstance(api_key, str) and not api_key.strip() else api_key
-    )
-    explicit_count = sum(
-        value is not None for value in (effective_api_key, private_key, auth)
-    )
+    """Resolve exactly one explicit or environment credential."""
+    explicit_count = sum(value is not None for value in (private_key, auth))
     if explicit_count > 1:
-        raise InvalidOptionsError(
-            "Pass exactly one of `api_key`, `private_key`, or `auth`."
-        )
+        raise InvalidOptionsError("Pass exactly one of `private_key` or `auth`.")
 
     if auth is not None:
         if not isinstance(auth, Mapping) or set(auth) not in (
@@ -132,17 +108,6 @@ def _resolve_credential(
         return _ResolvedCredential(
             kind=CredentialKind.PRIVATE_KEY, value=parse_private_key(private_key)
         )
-    if effective_api_key is not None:
-        return _ResolvedCredential(
-            kind=CredentialKind.API_KEY, value=_normalize_bearer_credential(effective_api_key)
-        )
-
-    environment_api_key = os.environ.get(API_KEY_ENV_VAR, "").strip()
-    if environment_api_key:
-        return _ResolvedCredential(
-            kind=CredentialKind.API_KEY,
-            value=_normalize_bearer_credential(environment_api_key),
-        )
     environment_private_key = os.environ.get(PRIVATE_KEY_ENV_VAR, "").strip()
     if environment_private_key:
         return _ResolvedCredential(
@@ -150,7 +115,10 @@ def _resolve_credential(
             value=parse_private_key(environment_private_key),
         )
 
-    raise MissingCredentialError(API_KEY_ENV_VAR, PRIVATE_KEY_ENV_VAR)
+    raise MissingCredentialError(
+        "Missing credential. Pass `private_key` or `auth`, or set "
+        f"`{PRIVATE_KEY_ENV_VAR}` in your environment."
+    )
 
 
 def _normalize_url(url: str) -> str:
@@ -184,12 +152,10 @@ class Mesa:
 
     Usage::
 
-        async with Mesa(api_key="mk_...") as mesa:
+        async with Mesa(private_key="mesa_private_key_acme_...") as mesa:
             repos = await mesa.repos.list()
     """
 
-    api_key: str | None
-    """The API key for an API-key client, otherwise ``None``."""
     api_url: str
     vcs_url: str
 
@@ -205,15 +171,11 @@ class Mesa:
     webhooks: Webhooks
     _credential: _ResolvedCredential
     _client: AuthenticatedClient
-    _cached_org: str | None
     _cached_whoami: WhoamiResponse200 | None
-    _cached_key_id: str | None
-    _key_id_resolution: asyncio.Task[str] | None
 
     def __init__(
         self,
         *,
-        api_key: str | None = None,
         private_key: str | None = None,
         auth: MesaAuth | None = None,
         api_url: str = DEFAULT_API_URL,
@@ -224,12 +186,6 @@ class Mesa:
     ) -> None:
         """Construct a Mesa client.
 
-        :param api_key: Long-lived API key (``mesa_...``). Falls back to the
-            ``MESA_API_KEY`` environment variable (the fallback is deprecated
-            alongside the parameter). API-key clients sign access tokens
-            locally and transparently mint filesystem credentials.
-            Deprecated: use ``private_key`` instead. API keys remain
-            supported for existing integrations.
         :param private_key: Organization-bound Ed25519 private key used to
             sign fresh request and filesystem credentials locally. Falls back
             to the ``MESA_PRIVATE_KEY`` environment variable.
@@ -238,26 +194,16 @@ class Mesa:
         :param api_url: Override the default API endpoint.
         :param vcs_url: Override the VCS endpoint derived from ``api_url``.
             Set this only when gRPC is served from a different origin.
-        :param org: Default organization slug. When omitted, read locally from
-            a private key or access token, or resolved lazily for an API key.
-            Deprecated: the organization is derived from the private key or
-            access token. Only API-key clients (also deprecated) need it.
+        :param org: Optional organization check. When supplied, it must match
+            the organization encoded in the private key or access token.
         :param user_agent: Custom ``User-Agent`` header.
         :param webhook_secret: Secret used by ``mesa.webhooks.receive(...)``.
 
         :raises MissingCredentialError: If no credential is provided directly
-            or through ``MESA_API_KEY`` or ``MESA_PRIVATE_KEY``.
+            or through ``MESA_PRIVATE_KEY``.
         """
-        resolved_credential = _resolve_credential(
-            api_key=api_key, private_key=private_key, auth=auth
-        )
+        resolved_credential = _resolve_credential(private_key=private_key, auth=auth)
         self._credential = resolved_credential
-        self.api_key = (
-            resolved_credential.value
-            if resolved_credential.kind is CredentialKind.API_KEY
-            and isinstance(resolved_credential.value, str)
-            else None
-        )
 
         self.api_url = _normalize_url(api_url)
         self.vcs_url = _normalize_url(vcs_url) if vcs_url else _url_origin(self.api_url)
@@ -276,19 +222,13 @@ class Mesa:
                 raise InvalidOptionsError(
                     "The `org` option must match the organization encoded in the private key."
                 )
-            self._cached_org = resolved_credential.value.org
         elif resolved_credential.kind is CredentialKind.ACCESS_TOKEN:
             assert resolved_credential.org is not None
             if provided_org and provided_org != resolved_credential.org:
                 raise InvalidOptionsError(
                     "The `org` option must match the organization encoded in the access token."
                 )
-            self._cached_org = resolved_credential.org
-        else:
-            self._cached_org = provided_org
         self._cached_whoami = None
-        self._cached_key_id = None
-        self._key_id_resolution = None
 
         if resolved_credential.kind is CredentialKind.PRIVATE_KEY:
             private_key_credential = resolved_credential.value
@@ -315,8 +255,6 @@ class Mesa:
             client_credential = resolved_credential.value
             request_attribution = RequestAttribution(
                 kind=AttributionKind.FIXED_TOKEN
-                if resolved_credential.kind is CredentialKind.ACCESS_TOKEN
-                else AttributionKind.REQUEST
             )
 
         self._client = create_client(
@@ -370,32 +308,8 @@ class Mesa:
                 repo_ids=signed_private_key.repo_ids,
             )
 
-        if self._credential.kind is CredentialKind.ACCESS_TOKEN:
-            raise InvalidOptionsError(
-                "Access-token clients cannot mint another access token. "
-                "Use an API key or private key."
-            )
-
-        if authors is not None:
-            raise InvalidOptionsError(
-                "Token authors can only be supplied for a private-key client."
-            )
-        assert isinstance(self._credential.value, str)
-        key_id = await self._resolve_key_id()
-        signed = sign_legacy_access_token(
-            api_key_id=key_id,
-            raw_api_key=self._credential.value,
-            scopes=scopes if scopes is not None else list(DEFAULT_TOKEN_SCOPES),
-            repos=repos,
-            repo_ids=repo_ids,
-            ttl_seconds=ttl_seconds,
-        )
-        return TokenCreateResult(
-            token=signed.token,
-            expires_at=signed.expires_at,
-            scopes=signed.scopes,
-            repos=signed.repos,
-            repo_ids=signed.repo_ids,
+        raise InvalidOptionsError(
+            "Access-token clients cannot mint another access token. Use a private key."
         )
 
     async def _create_mount_token(
@@ -434,45 +348,7 @@ class Mesa:
                 ttl_seconds=ttl_seconds,
             ).token
 
-        if authors is not None:
-            raise InvalidOptionsError("Mount authors require a private-key client.")
-        signed = await self.tokens.create(
-            scopes=scopes,
-            repos=repos,
-            ttl_seconds=ttl_seconds,
-        )
-        return signed.token
-
-    async def _resolve_key_id(self) -> str:
-        """Resolve and cache this client's API key id, needed to build the access
-        token ``kid`` header.
-
-        Sourced from ``GET /whoami``, which returns the id of the key the
-        request authenticated with. Lazily fetched and cached for the life of
-        the client. Concurrent signs share a single in-flight ``/whoami`` rather
-        than each kicking off their own.
-        """
-        if self._cached_key_id:
-            return self._cached_key_id
-
-        if self._key_id_resolution is None:
-            self._key_id_resolution = asyncio.ensure_future(self._fetch_key_id())
-
-        try:
-            return await self._key_id_resolution
-        except BaseException:
-            # Allow a later sign to retry rather than caching the failure forever.
-            self._key_id_resolution = None
-            raise
-
-    async def _fetch_key_id(self) -> str:
-        whoami = await self.whoami()
-        if not whoami.key_id:
-            raise OrgResolutionError(
-                "Unable to resolve API key id from /whoami; cannot sign access tokens."
-            )
-        # ``whoami()`` already caches ``key_id`` on this path, so no need to write it again.
-        return whoami.key_id
+        raise AssertionError("unreachable credential kind")
 
     @property
     def fs(self) -> FsNamespace:
@@ -488,10 +364,7 @@ class Mesa:
     async def resolve_org(self, org: str | None = None) -> str:
         """Return ``org`` if given, otherwise the client's default org.
 
-        The default is taken from the private key, access token, or constructor's
-        ``org`` parameter when available. API-key clients otherwise resolve it
-        from ``/whoami`` on first use and cache it. Raises
-        :exc:`OrgResolutionError` if no default can be determined.
+        The default is taken from the private key or access token.
         """
         requested_org = org.strip() if org else None
         if requested_org and looks_like_private_key(requested_org):
@@ -512,21 +385,7 @@ class Mesa:
                     "Access-token clients are bound to the organization encoded in the token."
                 )
             return self._credential.org
-        if requested_org:
-            return requested_org
-        if self._cached_org:
-            return self._cached_org
-        try:
-            whoami = await self.whoami()
-        except ApiError:
-            raise
-        except Exception as exc:
-            raise OrgResolutionError(
-                "Unable to resolve default organization. "
-                "Provide `org` per call or verify your credential scopes."
-            ) from exc
-        self._cached_org = whoami.org.slug
-        return self._cached_org
+        raise AssertionError("unreachable credential kind")
 
     async def whoami(self) -> WhoamiResponse200:
         """Return the identity tied to the credential. Cached after first call."""
@@ -536,9 +395,6 @@ class Mesa:
         resp = await whoami_api.asyncio_detailed(client=self._client)
         result = unwrap(resp)
         self._cached_whoami = result
-        self._cached_org = result.org.slug
-        if result.key_id:
-            self._cached_key_id = result.key_id
         return result
 
     async def __aenter__(self) -> Mesa:

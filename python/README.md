@@ -39,12 +39,11 @@ mesa = Mesa(private_key=os.environ["MESA_PRIVATE_KEY"])
 
 # Anywhere you were handed a token; the SDK forwards it unchanged.
 scoped = Mesa(auth={"access_token": access_token})
-
-# API keys are deprecated in favor of private keys, but still fully supported.
-compatible = Mesa(api_key=os.environ["MESA_API_KEY"], org="acme")
 ```
 
-Pass exactly one of `private_key`, `auth`, or `api_key`. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential; an API-key client resolves it from `/whoami` unless you pass `org`.
+Pass exactly one of `private_key` or `auth`. When neither is present, the SDK reads `MESA_PRIVATE_KEY`. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential.
+
+The Python SDK does not accept API keys as client credentials and does not read `MESA_API_KEY`. API keys remain supported by the Mesa CLI and direct backend interfaces.
 
 #### Scoped access tokens
 
@@ -59,7 +58,7 @@ minted = await mesa.tokens.create(
 )
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Minting from an API key still works and keeps its older limits of 1 hour by default, up to 24 hours.
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. A client built from an access token cannot mint another token.
 
 ### Repositories
 
@@ -123,7 +122,9 @@ diff = await mesa.diffs.get(
 )
 ```
 
-### API Keys
+### API Key Management
+
+An admin-scoped private-key or access-token client can still create, list, and revoke API keys for CLI and direct backend integrations. The SDK cannot use the returned API key as its own credential.
 
 ```python
 keys = await mesa.api_keys.list()
@@ -308,10 +309,9 @@ response = await list_repos.asyncio_detailed("acme", client=client)
 |-----------|------|---------|-------------|
 | `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Signing private key for trusted processes |
 | `auth` | `MesaAuth \| None` | `None` | A private key or an access token, passed as one object |
-| `api_key` | `str \| None` | `MESA_API_KEY` env var | API key, deprecated in favor of private keys but still supported |
 | `api_url` | `str` | `https://api.mesa.dev/v1` | Base URL for the Mesa API |
 | `vcs_url` | `str \| None` | `None` | Optional VCS gateway override. Only use when self-hosting Mesa. |
-| `org` | `str \| None` | Read from the credential, or `/whoami` | Default organization slug |
+| `org` | `str \| None` | Read from the credential | Optional organization check. It must match the organization encoded in the credential. |
 | `user_agent` | `str \| None` | `None` | Custom user agent suffix |
 | `webhook_secret` | `str \| None` | `None` | Secret used by `mesa.webhooks.receive(...)` |
 

@@ -14,7 +14,6 @@ export {
   type RepoTagValueFilter,
   type TokensCreateAuthor,
   type TokensCreateInput,
-  type TokensCreateLegacyInput,
   type TokensCreatePrivateKeyInput,
   type TokensCreateResponse,
 } from './api/index.js';

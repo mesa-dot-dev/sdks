@@ -1,30 +1,17 @@
 /**
- * Local access-token signing for API keys and Ed25519 signing private keys.
- * Both formats are produced entirely offline with no network round trip.
+ * Local access-token signing for Ed25519 signing private keys. Tokens are
+ * produced entirely offline with no network round trip.
  *
  * This is the SDK-side counterpart to the server implementations in
- * `packages/core/src/auth/access-token-legacy.ts` and
- * `packages/core/src/auth/signing-key-access-token.ts`. Their wire contracts
- * live in `context/auth/legacy-access-token-protocol.md` and
- * `context/auth/signing-key-access-token-protocol.md`. JSON key order does not
- * affect verification; each implementation may emit claims in any order.
- *
- * Secret derivation:
- *   secret = base64url_nopad(SHA-256(utf8(raw_api_key)))
- * This is byte-identical to the value stored in the server's `apikey.key`
- * column. The HMAC key is the UTF-8 bytes of this base64url string.
- *
- * Legacy HS256 tokens carry no org or user info. The server derives both from
- * the API key row at verification time and clamps the requested scopes/repos
- * to the key's current permissions. New callers should use canonical
- * `repo_ids`; the backward-compatible `repos` claim carries full `org/repo`
- * names.
+ * `packages/core/src/auth/signing-key-access-token.ts`. The wire contract lives
+ * in `context/auth/signing-key-access-token-protocol.md`. JSON key order does
+ * not affect verification.
  *
  * Implemented with `node:crypto` only so the published SDK retains Node 18
  * support without adding a JWT dependency.
  */
 
-import { createHash, createHmac, randomUUID, sign as signEd25519 } from 'node:crypto';
+import { randomUUID, sign as signEd25519 } from 'node:crypto';
 import type { CreateApiKeyData } from '@mesadev/rest';
 import { z } from 'zod';
 import { InvalidOptionsError } from '../lib/errors.js';
@@ -37,19 +24,6 @@ import type { PrivateKeyCredential } from './signing-key.js';
 const ACCESS_TOKEN_AUD = 'mesa-api';
 /** JOSE `typ` header (RFC 9068 style) distinguishing access tokens. */
 const ACCESS_TOKEN_TYP = 'mesa-at+jwt';
-/** JWA algorithm: HMAC-SHA256, keyed by the per-key derived secret. */
-const ACCESS_TOKEN_ALG = 'HS256';
-/**
- * Secret-derivation version, encoded into the `kid` header as
- * `<api_key_id>.<version>`. Bump on the server and here together if the
- * derivation ever changes.
- */
-const ACCESS_TOKEN_DERIVATION_VERSION = 'v1';
-
-/** Default token lifetime when the caller does not request one. */
-const ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 60 * 60; // 1 hour
-/** Hard cap on token lifetime; the server rejects anything longer at verify time. */
-const ACCESS_TOKEN_MAX_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 /** Default and maximum lifetimes accepted by the signing-key verifier. */
 const SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60; // 15 minutes
 const SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60; // 4 hours
@@ -152,18 +126,6 @@ export type OptionalRepositoryRestriction<NameField extends string, IdField exte
 
 export type ApiRepositoryRestriction = OptionalRepositoryRestriction<'repos', 'repo_ids'>;
 
-type SignAccessTokenInput = RepositoryRestriction & {
-  /** The API key ID that signs this token; encoded into the `kid` header. */
-  apiKeyId: string;
-  /** The raw API key (`mesa_...`) the client holds; the signing secret is derived from it. */
-  rawApiKey: string;
-  /** Requested scopes; clamped to the key's current scopes at verify time. */
-  scopes: string[];
-  /** Repository restrictions are supplied by the mutually exclusive `repos` or `repoIds` fields. */
-  /** Token lifetime in seconds. Defaults to {@link ACCESS_TOKEN_DEFAULT_TTL_SECONDS}. */
-  ttlSeconds?: number;
-};
-
 type SignedAccessToken = {
   token: string;
   /** Exact expiry as an ISO 8601 string. */
@@ -202,69 +164,9 @@ export function toApiRepositoryRestriction(
   return input.repoIds !== undefined ? { repo_ids: input.repoIds } : { repos: input.repos ?? null };
 }
 
-/**
- * Derive the HMAC signing secret from a raw API key. Byte-identical to the
- * value stored in the server's `apikey.key` column. The HMAC key is the UTF-8
- * bytes of the returned base64url-nopad string.
- */
-export function deriveAccessTokenSigningSecret(rawApiKey: string): string {
-  return createHash('sha256').update(rawApiKey, 'utf8').digest('base64url');
-}
-
-/** The `kid` header: `<api_key_id>.<derivation_version>`. */
-function buildKid(apiKeyId: string): string {
-  return `${apiKeyId}.${ACCESS_TOKEN_DERIVATION_VERSION}`;
-}
-
 /** base64url-nopad encode a UTF-8 string. Node's `base64url` is already unpadded. */
 function base64UrlJson(value: object): string {
   return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
-}
-
-/**
- * Sign an access token with HS256 entirely client-side. The `iss` claim is the
- * minting API key id (mirrors the `kid` header). JSON key order is not
- * semantically meaningful because the server verifies the signature, not a byte-exact
- * string.
- */
-export function signAccessToken(input: SignAccessTokenInput): SignedAccessToken {
-  const ttlSeconds = input.ttlSeconds ?? ACCESS_TOKEN_DEFAULT_TTL_SECONDS;
-  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > ACCESS_TOKEN_MAX_TTL_SECONDS) {
-    throw new InvalidOptionsError(`Token TTL must be an integer between 1 and ${ACCESS_TOKEN_MAX_TTL_SECONDS} seconds`);
-  }
-
-  const iat = Math.floor(Date.now() / 1000);
-  const exp = iat + ttlSeconds;
-  const jti = randomUUID();
-
-  if (input.repos !== undefined && input.repoIds !== undefined) {
-    throw new InvalidOptionsError('Token repos and repoIds restrictions are mutually exclusive');
-  }
-
-  const repoRestriction = input.repoIds !== undefined ? { repo_ids: input.repoIds } : { repos: input.repos ?? null };
-  const header = { alg: ACCESS_TOKEN_ALG, typ: ACCESS_TOKEN_TYP, kid: buildKid(input.apiKeyId) };
-  const payload = {
-    iss: input.apiKeyId,
-    aud: ACCESS_TOKEN_AUD,
-    scopes: input.scopes,
-    ...repoRestriction,
-    iat,
-    exp,
-    jti,
-  };
-
-  const signingInput = `${base64UrlJson(header)}.${base64UrlJson(payload)}`;
-  const secret = deriveAccessTokenSigningSecret(input.rawApiKey);
-  const signature = createHmac('sha256', secret).update(signingInput, 'utf8').digest('base64url');
-  const token = `${signingInput}.${signature}`;
-
-  return {
-    token,
-    expiresAt: new Date(exp * 1000).toISOString(),
-    scopes: input.scopes,
-    ...(input.repoIds !== undefined ? { repoIds: input.repoIds } : { repos: input.repos ?? null }),
-    jti,
-  };
 }
 
 /** Sign the minimal Ed25519 access-token contract accepted by the server. */

@@ -108,7 +108,6 @@ type ResolveOrg = (org?: string) => Promise<string>;
 type NormalizedSigningKeyAuthors = ReturnType<typeof normalizeSigningKeyAuthors>;
 
 type RequestAttribution =
-  | { kind: 'request' }
   | { kind: 'fixed-token' }
   | { kind: 'private-key'; sign: (authors: NormalizedSigningKeyAuthors) => string };
 
@@ -116,7 +115,7 @@ type OrgRequestContext = {
   restClient: RestClient;
   resolveOrg: ResolveOrg;
   webhookSecret?: string;
-  /** Sign an access token locally with the configured API key or private key. */
+  /** Sign an access token locally with the configured private key. */
   signToken: (input: TokensCreateInput) => Promise<TokensCreateResponse>;
   requestAttribution: RequestAttribution;
 };
@@ -140,17 +139,6 @@ type TokensCreateBase = ApiRepositoryRestriction & {
   org?: string;
 };
 
-/**
- * Existing `tokens.create()` input for API-key clients. Applies only to the
- * deprecated API-key path; private-key clients use
- * {@link TokensCreatePrivateKeyInput}.
- */
-export type TokensCreateLegacyInput = TokensCreateBase & {
-  /** Token lifetime in seconds (1..86400). Defaults to 3600. */
-  ttl_seconds?: number;
-  authors?: never;
-};
-
 /** `tokens.create()` input for private-key clients. */
 export type TokensCreatePrivateKeyInput = TokensCreateBase & {
   /** Ordered, nonempty commit attribution encoded into the token. */
@@ -159,7 +147,7 @@ export type TokensCreatePrivateKeyInput = TokensCreateBase & {
   ttl_seconds?: number;
 };
 
-export type TokensCreateInput = TokensCreateLegacyInput | TokensCreatePrivateKeyInput;
+export type TokensCreateInput = TokensCreatePrivateKeyInput;
 
 /** Result of `tokens.create()`. */
 export type TokensCreateResponse = RepositoryRestriction<'repos', 'repo_ids'> & {
@@ -321,13 +309,6 @@ function prepareCommitRequest(
     throw new InvalidOptionsError('Pass exactly one of `author` or `authors`.');
   }
 
-  if (requestAttribution.kind === 'request') {
-    if (hasAuthors) {
-      throw new InvalidOptionsError('Ordered `authors` require a private-key client.');
-    }
-    return { body: input };
-  }
-
   if (requestAttribution.kind === 'fixed-token') {
     if (hasAuthor || hasAuthors) {
       throw new InvalidOptionsError('Access-token authors are fixed when the token is minted.');
@@ -385,8 +366,8 @@ export function createApiResources({
       },
     },
     tokens: {
-      /** Sign locally with an API key or private key. Static access-token clients cannot mint another token. */
-      create: (input: TokensCreateInput = {}) => signToken(input),
+      /** Sign locally with a private key. Static access-token clients cannot mint another token. */
+      create: (input: TokensCreateInput) => signToken(input),
     },
     /**
      * @deprecated Manage API keys from the dashboard and authenticate new

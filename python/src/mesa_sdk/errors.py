@@ -24,29 +24,11 @@ class MesaError(Exception):
 
 
 class MissingCredentialError(MesaError):
-    def __init__(
-        self, api_key_env_var: str, private_key_env_var: str | None = None
-    ) -> None:
-        if private_key_env_var is None:
-            message = (
-                f"Missing API key. Pass `api_key` or set `{api_key_env_var}` "
-                "in your environment."
-            )
-        else:
-            message = (
-                "Missing credential. Pass `api_key` or `private_key`, or set "
-                f"`{api_key_env_var}` or `{private_key_env_var}` in your environment."
-            )
+    def __init__(self, message: str = "Missing credential.") -> None:
         super().__init__(
             "MISSING_CREDENTIAL",
             message,
         )
-
-
-# Deprecated alias retained for backward compatibility. Points at the same class,
-# so ``except MissingApiKeyError`` and ``except MissingCredentialError`` are
-# interchangeable. Prefer ``MissingCredentialError``.
-MissingApiKeyError = MissingCredentialError
 
 
 class InvalidApiUrlError(MesaError):

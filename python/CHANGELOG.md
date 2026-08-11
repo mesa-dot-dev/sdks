@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.45.0] - 2026-08-11
 
 ### Changed
 
@@ -16,11 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Remove top-level `RepoConfig.bookmark`, `RepoConfig.change_id`, and `RepoConfig.read_only`. Use `at` and `mode` instead
 - **Breaking:** `RepoConfig.mode` is now a `MountMode` enum (`MountMode.rw` / `MountMode.ro`); the strings `"rw"` / `"ro"` remain accepted. The public `MountMode` name is this enum (layout JSON still uses `"ro"` / `"rw"` string literals)
 - **Breaking:** Resolve `fs.changes.new(..., bookmark=...)` (and `edit` / mount `at={"bookmark": ...}`) strictly against `refs/heads/<name>`. A string that is not a bookmark no longer falls through server-side revspec resolution to a change id; pass `change_id` to fork from a change
-- Deprecate the `api_key` client option, the `MESA_API_KEY` environment fallback, and the `api_keys` resource in favor of private keys, and the `org` client option (the organization is derived from the credential); API keys remain supported
 
 ### Added
 
 - Add mount `RepoConfig` fields `mode`, `at`, and `branched_from` to open an existing revision or fork a new revision at mount time (create change → optional `as.bookmark` → publish checkout; omit `as.bookmark` for an anonymous tip)
+
+### Removed
+
+- **Breaking:** Remove API-key authentication from the SDK, including `api_key`, `MESA_API_KEY`, legacy HS256 token minting, and `MissingApiKeyError`; use `private_key` or `auth["access_token"]` instead
 
 ## [0.44.1] - 2026-08-09
 

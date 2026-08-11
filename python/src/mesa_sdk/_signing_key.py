@@ -22,13 +22,12 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from mesa_sdk._access_token import (
-    ACCESS_TOKEN_AUD,
-    ACCESS_TOKEN_TYP,
-    SignedAccessToken,
-)
 from mesa_sdk.errors import InvalidOptionsError
 
+#: Audience claim: access tokens are only valid when presented to the Mesa API.
+ACCESS_TOKEN_AUD = "mesa-api"
+#: JOSE ``typ`` header distinguishing Mesa access tokens.
+ACCESS_TOKEN_TYP = "mesa-at+jwt"
 #: Prefix for organization-bound Ed25519 signing private keys.
 MESA_PRIVATE_KEY_PREFIX = "mesa_private_key_"
 #: Default signing-key token lifetime.
@@ -77,6 +76,18 @@ class PrivateKeyCredential:
     org: str
     private_key: Ed25519PrivateKey = field(repr=False)
     public_jwk: PublicJwk
+
+
+@dataclass(frozen=True)
+class SignedAccessToken:
+    """A locally signed access token and its effective claims."""
+
+    token: str
+    expires_at: datetime
+    scopes: list[str]
+    repos: list[str] | None
+    repo_ids: list[str] | None
+    jti: str
 
 
 def _base64url_encode(value: bytes) -> str:

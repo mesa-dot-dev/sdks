@@ -39,15 +39,16 @@ This package exposes org-inferred REST resources under `mesa.*`.
 
 - `privateKey?: string` (falls back to `MESA_PRIVATE_KEY` in Node)
 - `auth?: { privateKey } | { accessToken }`
-- `apiKey?: string` (deprecated in favor of private keys, but still fully supported; falls back to `MESA_API_KEY` in Node)
 - `apiUrl?: string` (defaults to `https://api.mesa.dev/v1`)
 - `vcsUrl?: string` (optional VCS gateway override; only use when self-hosting Mesa)
-- `org?: string` (optional default org; with a private key or access token it has to match the org the credential already names)
+- `org?: string` (optional organization check; it has to match the organization the credential already names)
 - `fetch?: typeof fetch`
 - `userAgent?: string`
 - `webhookSecret?: string` (used by `mesa.webhooks.receive(...)`)
 
-Pass exactly one credential. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential; an API-key client resolves it from `/whoami` unless you pass `org`.
+Pass exactly one of `privateKey` or `auth`. When neither is present, the SDK reads `MESA_PRIVATE_KEY` in Node. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential.
+
+The TypeScript SDK does not accept API keys as client credentials and does not read `MESA_API_KEY`. API keys remain supported by the Mesa CLI and direct backend interfaces.
 
 ### Scoped access tokens
 
@@ -62,7 +63,7 @@ const { token } = await mesa.tokens.create({
 });
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Minting from an API key still works and keeps its older limits of 1 hour by default, up to 24 hours.
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. A client built from an access token cannot mint another token.
 
 ## Webhook Handlers
 
@@ -105,5 +106,5 @@ Use `@mesadev/rest` directly, or call the API with your own HTTP client, when yo
 If you previously used the older generated `@mesadev/sdk` package:
 
 - use `apiUrl` instead of `serverURL`
-- rely on default org inference from `/whoami` or pass `org` per call
+- use the organization encoded in the private key or access token
 - use resource namespaces (`mesa.repos`, `mesa.changes`, etc.); install `@mesadev/rest` directly when you need generated REST operations

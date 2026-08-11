@@ -73,8 +73,7 @@ async with mesa.fs.mount(
 ```
 
 `ttl` defaults to `900` (15 minutes) and is capped at `14_400` (4 hours). A
-value outside that range raises `InvalidOptionsError`. API-key mounts keep their
-older defaults of `3600` (1 hour) up to `86400` (24 hours).
+value outside that range raises `InvalidOptionsError`.
 
 ## Reading files
 

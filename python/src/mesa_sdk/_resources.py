@@ -189,8 +189,6 @@ if TYPE_CHECKING:
 class AttributionKind(Enum):
     """How commit-producing REST requests carry author attribution."""
 
-    #: API-key clients: the legacy ``author`` request-body field.
-    REQUEST = "request"
     #: Private-key clients: authors signed into a per-request token.
     PRIVATE_KEY = "private_key"
     #: Access-token clients: authors fixed when the token was minted.
@@ -217,13 +215,6 @@ def _prepare_commit_request(
         raise InvalidOptionsError("Pass exactly one of `author` or `authors`.")
 
     match attribution.kind:
-        case AttributionKind.REQUEST:
-            if authors is not None:
-                raise InvalidOptionsError(
-                    "Ordered `authors` require a private-key client."
-                )
-            return author, None
-
         case AttributionKind.FIXED_TOKEN:
             if author is not None or authors is not None:
                 raise InvalidOptionsError(
@@ -544,9 +535,8 @@ class TokenSigner(Protocol):
 class Tokens:
     """Access-token signing: ``mesa.tokens``.
 
-    Tokens are short-lived JWTs that expire on their own and cannot be revoked
-    or refreshed — sign a new one instead. Signing is entirely local. API-key
-    clients use the legacy HS256 format; private-key clients use Ed25519.
+    Tokens are short-lived Ed25519 JWTs that expire on their own and cannot be
+    revoked or refreshed. Sign a new one instead. Signing is entirely local.
     """
 
     def __init__(self, sign_token: TokenSigner) -> None:
@@ -565,24 +555,19 @@ class Tokens:
         """Sign a short-lived access token (JWT) carrying at most this client's
         scopes and repository restrictions.
 
-        API-key tokens are clamped to the key's permissions at verification.
         Private-key clients must pass a non-empty ordered ``authors`` list.
         Static access-token clients cannot mint another token. ``org`` remains
         accepted and ignored for source compatibility with prior versions.
 
         :param scopes: Token scopes (``"read"``, ``"write"``, ``"admin"``).
-            Clamped to the calling API key's scopes at verify time. Defaults to
-            ``["read", "write"]``.
+            Defaults to ``["read", "write"]``.
         :param repos: Restrict the token to these repos, as full ``org/repo``
-            names. Resolved to ids and clamped to the calling API key's
-            repository restrictions at verify time. Defaults to no extra
-            restriction.
+            names. Defaults to no extra restriction.
         :param repo_ids: Restrict the token by canonical repository ID.
             Mutually exclusive with ``repos``.
         :param authors: Ordered commit attribution for a private-key token.
-        :param ttl_seconds: Token lifetime in seconds. API-key tokens default
-            to 3600 and allow up to 86400. Private-key tokens default to 900
-            and allow up to 14400.
+        :param ttl_seconds: Token lifetime in seconds. Defaults to 900 and
+            allows up to 14400.
         :param org: Deprecated and ignored. The signing credential supplies the
             token's organization.
 
@@ -1033,10 +1018,6 @@ class Bookmarks:
         :param author: Singular commit attribution for a private-key client.
         :param authors: Ordered commit attribution for a private-key client.
         """
-        if self._request_attribution.kind is AttributionKind.REQUEST and author is not None:
-            raise InvalidOptionsError(
-                "Bookmark merge authors require a private-key client."
-            )
         _, credential = _prepare_commit_request(
             attribution=self._request_attribution,
             author=author,

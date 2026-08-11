@@ -25,7 +25,6 @@ SDK_USER_AGENT = f"mesa-sdk-python/{__version__}"
 class CredentialKind(Enum):
     """How a Mesa client authenticates."""
 
-    API_KEY = "api_key"
     PRIVATE_KEY = "private_key"
     ACCESS_TOKEN = "access_token"
 

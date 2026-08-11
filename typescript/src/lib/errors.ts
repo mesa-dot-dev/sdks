@@ -42,21 +42,11 @@ export class MesaApiError extends Error {
 }
 
 export class MissingCredentialError extends MesaError {
-  constructor(apiKeyEnvVar = 'MESA_API_KEY', privateKeyEnvVar?: string) {
-    const message = privateKeyEnvVar
-      ? `Missing credential. Pass \`apiKey\` or \`privateKey\`, or set \`${apiKeyEnvVar}\` or \`${privateKeyEnvVar}\` in your environment.`
-      : `Missing API key. Pass \`apiKey\` or set \`${apiKeyEnvVar}\` in your environment.`;
+  constructor(message = 'Missing credential.') {
     super('MISSING_CREDENTIAL', message);
     this.name = 'MissingCredentialError';
   }
 }
-
-/**
- * @deprecated Renamed to {@link MissingCredentialError}. This alias points at the
- * same class, so `instanceof MissingApiKeyError` and `instanceof MissingCredentialError`
- * are interchangeable. Prefer `MissingCredentialError`.
- */
-export const MissingApiKeyError = MissingCredentialError;
 
 export class InvalidApiUrlError extends MesaError {
   constructor(apiUrl: string) {

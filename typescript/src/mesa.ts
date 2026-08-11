@@ -2,7 +2,6 @@ import type { WhoamiResponse } from '@mesadev/rest';
 import { z } from 'zod';
 import {
   normalizeSigningKeyAuthors,
-  signAccessToken,
   signPrivateKeyAccessToken,
   toApiRepositoryRestriction,
   toSignerRepositoryRestriction,
@@ -18,7 +17,6 @@ import {
   type PrivateKeyChangesCreateInput,
   type PrivateKeyChangesPatchInput,
   type TokensCreateInput,
-  type TokensCreateLegacyInput,
   type TokensCreatePrivateKeyInput,
   type TokensCreateResponse,
 } from './api/resources.js';
@@ -34,7 +32,6 @@ import {
 import { InvalidApiUrlError, InvalidOptionsError, MissingCredentialError, OrgResolutionError } from './lib/errors.js';
 
 const DEFAULT_API_URL = 'https://api.mesa.dev/v1';
-const API_KEY_ENV_VAR = 'MESA_API_KEY';
 const PRIVATE_KEY_ENV_VAR = 'MESA_PRIVATE_KEY';
 const ACCESS_TOKEN_ORG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -46,7 +43,6 @@ const authSchema = z.union([
 ]);
 
 type ResolvedCredential =
-  | { kind: 'apiKey'; value: string }
   | { kind: 'privateKey'; value: PrivateKeyCredential }
   | {
       kind: 'accessToken';
@@ -93,7 +89,7 @@ function normalizeBearerCredential(credential: string): string {
     );
   }
   if (/^Bearer\s+/i.test(normalized)) {
-    throw new InvalidOptionsError('Pass only the token or API key value, without the `Bearer` scheme.');
+    throw new InvalidOptionsError('Pass only the access token value, without the `Bearer` scheme.');
   }
   return normalized;
 }
@@ -111,19 +107,13 @@ function getAccessTokenOrg(token: string): string {
   }
 }
 
-/**
- * Resolve one explicit or environment credential. Explicit credentials never
- * combine, and the existing API-key environment variable remains authoritative
- * during migration when both environment variables are set. The `MESA_API_KEY`
- * fallback is deprecated in favor of `MESA_PRIVATE_KEY`; its precedence is
- * unchanged so existing environments keep working.
- */
+/** Resolve one explicit or environment credential. */
 function resolveCredential(options: MesaOptions): ResolvedCredential {
-  const explicitCredentialCount = [options.apiKey, options.privateKey, options.auth].filter(
+  const explicitCredentialCount = [options.privateKey, options.auth].filter(
     (credential) => credential !== undefined
   ).length;
   if (explicitCredentialCount > 1) {
-    throw new InvalidOptionsError('Pass exactly one of `apiKey`, `privateKey`, or `auth`.');
+    throw new InvalidOptionsError('Pass exactly one of `privateKey` or `auth`.');
   }
 
   if (options.auth !== undefined) {
@@ -146,20 +136,13 @@ function resolveCredential(options: MesaOptions): ResolvedCredential {
     return { kind: 'privateKey', value: parsePrivateKey(options.privateKey) };
   }
 
-  if (options.apiKey !== undefined) {
-    return { kind: 'apiKey', value: normalizeBearerCredential(options.apiKey) };
-  }
-
-  const environmentApiKey = getEnvVar(API_KEY_ENV_VAR);
-  if (environmentApiKey !== undefined) {
-    return { kind: 'apiKey', value: normalizeBearerCredential(environmentApiKey) };
-  }
-
   const environmentPrivateKey = getEnvVar(PRIVATE_KEY_ENV_VAR);
   if (environmentPrivateKey !== undefined) {
     return { kind: 'privateKey', value: parsePrivateKey(environmentPrivateKey) };
   }
-  throw new MissingCredentialError(API_KEY_ENV_VAR, PRIVATE_KEY_ENV_VAR);
+  throw new MissingCredentialError(
+    'Missing credential. Pass `privateKey` or `auth`, or set `MESA_PRIVATE_KEY` in your environment.'
+  );
 }
 
 export type MesaAuth = z.infer<typeof authSchema>;
@@ -167,30 +150,22 @@ export type MesaAuth = z.infer<typeof authSchema>;
 type PrivateKeyAuthors = NonNullable<TokensCreatePrivateKeyInput['authors']>;
 type PrivateKeyMesaOptions = { privateKey: string } | { auth: { privateKey: string } };
 type AccessTokenMesaOptions = { auth: { accessToken: string } };
-type ApiKeyMesaOptions = { apiKey: string };
-type CredentialSpecific<TOptions extends MesaOptions, TPrivateKey, TAccessToken, TApiKey, TDynamic> = [
-  TOptions,
-] extends [PrivateKeyMesaOptions]
+type CredentialSpecific<TOptions extends MesaOptions, TPrivateKey, TAccessToken, TDynamic> = [TOptions] extends [
+  PrivateKeyMesaOptions,
+]
   ? TPrivateKey
   : [TOptions] extends [AccessTokenMesaOptions]
     ? TAccessToken
-    : [TOptions] extends [ApiKeyMesaOptions]
-      ? TApiKey
-      : TDynamic;
+    : TDynamic;
 
 type PrivateKeyTokens = {
   create: (input: TokensCreatePrivateKeyInput) => Promise<TokensCreateResponse>;
-};
-
-type ApiKeyTokens = {
-  create: (input?: TokensCreateLegacyInput) => Promise<TokensCreateResponse>;
 };
 
 type MesaTokens<TOptions extends MesaOptions> = CredentialSpecific<
   TOptions,
   PrivateKeyTokens,
   Omit<ApiResources['tokens'], 'create'>,
-  ApiKeyTokens,
   ApiResources['tokens']
 >;
 
@@ -210,7 +185,6 @@ type MesaBookmarks<TOptions extends MesaOptions> = CredentialSpecific<
   TOptions,
   PrivateKeyBookmarks,
   FixedTokenBookmarks,
-  ApiResources['bookmarks'],
   DynamicBookmarks
 >;
 
@@ -233,31 +207,25 @@ type MesaChanges<TOptions extends MesaOptions> = CredentialSpecific<
   TOptions,
   PrivateKeyChanges,
   FixedTokenChanges,
-  ApiResources['changes'],
   DynamicChanges
 >;
 
 export interface MesaOptions {
-  /**
-   * Long-lived API key (`mesa_...`) used directly for requests and to sign short-lived access tokens locally.
-   * @deprecated Use `privateKey` instead. API keys remain supported for existing integrations.
-   */
-  apiKey?: string;
   /** Organization-root Ed25519 private key used to sign REST request JWTs and `tokens.create()` locally. */
   privateKey?: string;
   /** Grouped private-key or signing-key access-token authentication. */
   auth?: MesaAuth;
   apiUrl?: string;
   vcsUrl?: string;
-  /**
-   * @deprecated The organization is derived from the private key or access
-   * token. Only API-key clients (also deprecated) need it.
-   */
+  /** The organization is derived from the credential. If supplied, this value must match it. */
   org?: string;
   fetch?: typeof globalThis.fetch;
   userAgent?: string;
   webhookSecret?: string;
 }
+
+type RejectUnknownMesaOptions<TOptions extends MesaOptions> =
+  Exclude<keyof TOptions, keyof MesaOptions> extends never ? [] : [invalidOptions: never];
 
 interface FsMountBaseOptions {
   cache?: {
@@ -265,10 +233,9 @@ interface FsMountBaseOptions {
   };
   telemetry?: TelemetryConfig;
   /**
-   * Lifetime of the mount token, in seconds. API-key clients default to one
-   * hour and allow up to 24 hours. Private-key clients default to 15 minutes
-   * and allow up to four hours. There is no refresh; once the token expires,
-   * the mount fails closed.
+   * Lifetime of the mount token, in seconds. Private-key clients default to
+   * 15 minutes and allow up to four hours. There is no refresh; once the token
+   * expires, the mount fails closed.
    */
   ttl?: number;
 }
@@ -329,18 +296,12 @@ type MesaFs<TOptions extends MesaOptions> = CredentialSpecific<
     mount: (options: Omit<FsMountReposOptions, 'ttl'>) => Promise<MesaFileSystem>;
   },
   {
-    (options: { layout: LayoutSpec; ttl?: number; authors?: never }): FsLayoutDefinition;
-    mount: (options: FsMountReposOptions & { authors?: never }) => Promise<MesaFileSystem>;
-  },
-  {
     (options: RuntimeFsLayoutOptions): FsLayoutDefinition;
     mount: (options: RuntimeFsMountReposOptions) => Promise<MesaFileSystem>;
   }
 >;
 
 export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
-  /** The API key this client was constructed with, if it is an API-key client. */
-  readonly apiKey: string | undefined;
   readonly apiUrl: string;
   readonly vcsUrl: string;
   readonly org: ApiResources['org'];
@@ -362,23 +323,22 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
 
   private readonly credential: ResolvedCredential;
   private readonly restClient: RestClient;
-  private readonly orgResolutionPromise: Promise<string>;
-  private readonly whoAmIResolutionPromise: Promise<WhoamiResponse> | null;
-  private cachedOrgSlug: string | null = null;
   private cachedWhoAmI: WhoamiResponse | null = null;
-  private cachedKeyId: string | null = null;
-  private keyIdResolutionPromise: Promise<string> | null = null;
 
-  constructor(options: TOptions = {} as TOptions) {
+  constructor(options: TOptions = {} as TOptions, ..._invalidOptions: RejectUnknownMesaOptions<TOptions>) {
     if ((options as MesaOptions & { authors?: unknown }).authors !== undefined) {
       throw new InvalidOptionsError(
         'The `authors` option is not accepted by the Mesa constructor. Pass authors to the operation instead.'
       );
     }
+    if ('apiKey' in (options as MesaOptions & { apiKey?: unknown })) {
+      throw new InvalidOptionsError(
+        'The `apiKey` option is no longer supported. Use `privateKey` or `auth.accessToken`.'
+      );
+    }
     const resolvedCredential = resolveCredential(options);
     this.credential = resolvedCredential;
 
-    this.apiKey = resolvedCredential.kind === 'apiKey' ? resolvedCredential.value : undefined;
     this.apiUrl = normalizeUrl(options.apiUrl?.trim() || DEFAULT_API_URL);
     this.vcsUrl = normalizeUrl(options.vcsUrl?.trim() || new URL(this.apiUrl).origin);
     if (options.userAgent && looksLikePrivateKey(options.userAgent)) {
@@ -405,25 +365,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       userAgent: options.userAgent,
     });
 
-    if (resolvedCredential.kind === 'privateKey') {
-      this.cachedOrgSlug = resolvedCredential.value.org;
-      this.orgResolutionPromise = Promise.resolve(resolvedCredential.value.org);
-      this.whoAmIResolutionPromise = null;
-    } else if (resolvedCredential.kind === 'accessToken') {
-      this.cachedOrgSlug = resolvedCredential.org;
-      this.orgResolutionPromise = Promise.resolve(resolvedCredential.org);
-      this.whoAmIResolutionPromise = null;
-    } else if (providedOrg) {
-      this.cachedOrgSlug = providedOrg;
-      this.orgResolutionPromise = Promise.resolve(providedOrg);
-      this.whoAmIResolutionPromise = null;
-    } else {
-      const whoAmIPromise = this.fetchWhoAmI();
-      this.whoAmIResolutionPromise = whoAmIPromise;
-      this.orgResolutionPromise = this.resolveOrgFromWhoAmI(whoAmIPromise);
-      this.orgResolutionPromise.catch(() => undefined);
-    }
-
     const resources = createApiResources({
       restClient: this.restClient,
       resolveOrg: (org) => this.resolveOrg(org),
@@ -435,9 +376,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
               kind: 'private-key',
               sign: (authors) => signPrivateKeyAccessToken({ credential: resolvedCredential.value, authors }).token,
             }
-          : resolvedCredential.kind === 'accessToken'
-            ? { kind: 'fixed-token' }
-            : { kind: 'request' },
+          : { kind: 'fixed-token' },
     });
 
     this.org = resources.org;
@@ -465,9 +404,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       MesaFileSystem.validateLayout(layout.toString());
       const { org, scopes, repos } = await this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
       const tokenInput = { org, scopes, repos, ttl_seconds: ttl };
-      return resources.tokens.create(
-        this.credential.kind === 'privateKey' ? { ...tokenInput, authors: authors! } : tokenInput
-      );
+      return resources.tokens.create({ ...tokenInput, authors: authors! });
     };
 
     const mountLayout = async (
@@ -488,16 +425,13 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       // no refresh and no credential hot-swap, so when the token expires the
       // mount expires with it.
       const tokenInput = { org, scopes, repos, ttl_seconds: ttl };
-      const token =
-        this.credential.kind === 'privateKey'
-          ? signPrivateKeyAccessToken({
-              credential: this.credential.value,
-              authors: authors!,
-              scopes: tokenInput.scopes,
-              repos: tokenInput.repos,
-              ttlSeconds: tokenInput.ttl_seconds,
-            }).token
-          : (await resources.tokens.create(tokenInput)).token;
+      const token = signPrivateKeyAccessToken({
+        credential: this.credential.value,
+        authors: authors!,
+        scopes: tokenInput.scopes,
+        repos: tokenInput.repos,
+        ttlSeconds: tokenInput.ttl_seconds,
+      }).token;
       return this.createFs(org, options, token, layout);
     };
 
@@ -565,16 +499,13 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
           repos: canonicalRepos.map((r) => `${org}/${r.name}`),
           ttl_seconds: fsOptions.ttl,
         };
-        const token =
-          this.credential.kind === 'privateKey'
-            ? signPrivateKeyAccessToken({
-                credential: this.credential.value,
-                authors: authors!,
-                scopes: tokenInput.scopes,
-                repos: tokenInput.repos,
-                ttlSeconds: tokenInput.ttl_seconds,
-              }).token
-            : (await resources.tokens.create(tokenInput)).token;
+        const token = signPrivateKeyAccessToken({
+          credential: this.credential.value,
+          authors: authors!,
+          scopes: tokenInput.scopes,
+          repos: tokenInput.repos,
+          ttlSeconds: tokenInput.ttl_seconds,
+        }).token;
         return this.createFs(org, fsOptions, token);
       },
     }) as MesaFs<TOptions>;
@@ -648,21 +579,10 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       }
       return this.credential.value.org;
     }
-    if (this.credential.kind === 'accessToken') {
-      if (requestedOrg && requestedOrg !== this.credential.org) {
-        throw new InvalidOptionsError('Access-token clients are bound to the organization encoded in the token.');
-      }
-      return this.credential.org;
+    if (requestedOrg && requestedOrg !== this.credential.org) {
+      throw new InvalidOptionsError('Access-token clients are bound to the organization encoded in the token.');
     }
-    if (requestedOrg) {
-      return requestedOrg;
-    }
-
-    if (this.cachedOrgSlug) {
-      return this.cachedOrgSlug;
-    }
-
-    return this.orgResolutionPromise;
+    return this.credential.org;
   }
 
   async whoami(): Promise<WhoamiResponse> {
@@ -671,8 +591,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     }
 
     try {
-      const promise = this.whoAmIResolutionPromise ?? this.fetchWhoAmI();
-      return await promise;
+      return await this.fetchWhoAmI();
     } catch (error) {
       throw new OrgResolutionError('Unable to resolve caller identity from /whoami', { cause: error });
     }
@@ -681,48 +600,13 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
   private async fetchWhoAmI(): Promise<WhoamiResponse> {
     const whoami = await this.restClient.whoami();
     this.cachedWhoAmI = whoami;
-    this.cachedOrgSlug = whoami.org.slug;
-    if (whoami.key_id) {
-      this.cachedKeyId = whoami.key_id;
-    }
     return whoami;
   }
 
-  /**
-   * Resolve and cache this client's API key id, needed to build the access
-   * token `kid` header. Sourced from GET /whoami, which returns the id of the
-   * key the request authenticated with. Lazily fetched and cached for the life
-   * of the client.
-   */
-  private async resolveKeyId(): Promise<string> {
-    if (this.cachedKeyId) {
-      return this.cachedKeyId;
-    }
-
-    // Dedupe concurrent signs: without this, each in-flight call would kick off
-    // its own /whoami. Reuse the constructor's whoami when present (no explicit
-    // org), otherwise share a single lazy fetch across all callers.
-    this.keyIdResolutionPromise ??= (this.whoAmIResolutionPromise ?? this.fetchWhoAmI())
-      .then((whoami) => {
-        if (!whoami.key_id) {
-          throw new OrgResolutionError('Unable to resolve API key id from /whoami; cannot sign access tokens.');
-        }
-        this.cachedKeyId = whoami.key_id;
-        return whoami.key_id;
-      })
-      .catch((error) => {
-        // Allow a later sign to retry rather than caching the failure forever.
-        this.keyIdResolutionPromise = null;
-        throw error;
-      });
-
-    return this.keyIdResolutionPromise;
-  }
-
   /** Sign an access token locally from the credential this client holds. */
-  private async signToken(input: TokensCreateInput): Promise<TokensCreateResponse> {
+  private async signToken(input: TokensCreateInput | undefined): Promise<TokensCreateResponse> {
     if (this.credential.kind === 'privateKey') {
-      if (input.authors === undefined) {
+      if (input?.authors === undefined) {
         throw new InvalidOptionsError('Private-key tokens require a nonempty `authors` option.');
       }
       const signed = signPrivateKeyAccessToken({
@@ -740,42 +624,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       };
     }
 
-    if (this.credential.kind === 'accessToken') {
-      throw new InvalidOptionsError(
-        'Access-token clients cannot mint another access token. Use an API key or private key.'
-      );
-    }
-
-    if (input.authors !== undefined) {
-      throw new InvalidOptionsError('Private-key access tokens can only be minted with a private key.');
-    }
-    const keyId = await this.resolveKeyId();
-    const repositoryRestriction = toSignerRepositoryRestriction(input);
-    const signed = signAccessToken({
-      apiKeyId: keyId,
-      rawApiKey: this.credential.value,
-      scopes: input.scopes ?? [...DEFAULT_TOKEN_SCOPES],
-      ttlSeconds: input.ttl_seconds,
-      ...repositoryRestriction,
-    });
-
-    return {
-      token: signed.token,
-      expires_at: signed.expiresAt,
-      scopes: signed.scopes,
-      ...toApiRepositoryRestriction(signed),
-    };
-  }
-
-  private async resolveOrgFromWhoAmI(whoAmIPromise: Promise<WhoamiResponse>): Promise<string> {
-    try {
-      const whoami = await whoAmIPromise;
-      return whoami.org.slug;
-    } catch (error) {
-      throw new OrgResolutionError(
-        'Unable to resolve default organization from /whoami. Provide `org` per call or verify your credential scopes.',
-        { cause: error }
-      );
-    }
+    throw new InvalidOptionsError('Access-token clients cannot mint another access token. Use a private key.');
   }
 }

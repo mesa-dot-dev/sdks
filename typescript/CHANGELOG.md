@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.45.0] - 2026-08-11
 
 ### Changed
 
@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add mount `RepoConfig` fields `mode`, `at`, and `branchedFrom` to open an existing revision or fork a new revision at mount time (create change → optional `as.bookmark` → publish checkout; omit `as.bookmark` for an anonymous tip)
+
+### Removed
+
+- **Breaking:** Remove API-key authentication from the SDK, including `apiKey`, `MESA_API_KEY`, legacy HS256 token minting, and `MissingApiKeyError`; use `privateKey` or `auth.accessToken` instead
 
 ## [0.44.1] - 2026-08-09
 
