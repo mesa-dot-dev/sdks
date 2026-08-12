@@ -124,7 +124,6 @@ class MesaConfig:
         ``"all"`` or ``None`` mounts every repo the API key can access.
     :param disk_cache: Optional on-disk cache placement.
     :param api_base_url: Override the default API endpoint.
-    :param vcs_url: Override the default VCS endpoint.
     """
 
     org: str
@@ -134,7 +133,6 @@ class MesaConfig:
     mounted_repos: list[str] | Literal["all"] | None
     disk_cache: DiskCacheConfig | None
     api_base_url: str | None
-    vcs_url: str | None
 
     def __new__(
         cls,
@@ -146,7 +144,6 @@ class MesaConfig:
         mounted_repos: list[str] | Literal["all"] | None = None,
         disk_cache: DiskCacheConfig | None = None,
         api_base_url: str | None = None,
-        vcs_url: str | None = None,
     ) -> MesaConfig: ...
 
 # ---------------------------------------------------------------------------

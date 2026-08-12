@@ -135,18 +135,6 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip("/")
 
 
-def _url_origin(url: str) -> str:
-    parsed = urlparse(url)
-    if parsed.hostname is None:
-        raise InvalidApiUrlError(url)
-    hostname = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-    try:
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError as exc:
-        raise InvalidApiUrlError(url) from exc
-    return f"{parsed.scheme}://{hostname}{port}"
-
-
 class Mesa:
     """Async Mesa SDK client.
 
@@ -157,7 +145,6 @@ class Mesa:
     """
 
     api_url: str
-    vcs_url: str
 
     repos: Repos
     bookmarks: Bookmarks
@@ -179,7 +166,6 @@ class Mesa:
         private_key: str | None = None,
         auth: MesaAuth | None = None,
         api_url: str = DEFAULT_API_URL,
-        vcs_url: str | None = None,
         org: str | None = None,
         user_agent: str | None = None,
         webhook_secret: str | None = None,
@@ -192,8 +178,6 @@ class Mesa:
         :param auth: Grouped credential containing exactly one ``private_key``
             or compact JWT ``access_token``.
         :param api_url: Override the default API endpoint.
-        :param vcs_url: Override the VCS endpoint derived from ``api_url``.
-            Set this only when gRPC is served from a different origin.
         :param org: Optional organization check. When supplied, it must match
             the organization encoded in the private key or access token.
         :param user_agent: Custom ``User-Agent`` header.
@@ -206,7 +190,6 @@ class Mesa:
         self._credential = resolved_credential
 
         self.api_url = _normalize_url(api_url)
-        self.vcs_url = _normalize_url(vcs_url) if vcs_url else _url_origin(self.api_url)
         if user_agent and looks_like_private_key(user_agent):
             raise InvalidOptionsError(
                 "User-agent metadata must not contain Mesa private key material."

@@ -263,7 +263,6 @@ export interface MesaFileSystemConfigBase {
     diskCache?: { path: string; maxSizeBytes?: number };
   };
   apiBaseUrl?: string;
-  vcsUrl?: string;
   /** Telemetry and logging configuration. */
   telemetry?: TelemetryConfig;
 }

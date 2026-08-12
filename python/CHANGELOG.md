@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **Breaking:** Remove `vcs_url` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
+
 ## [0.45.0] - 2026-08-11
 
 ### Changed

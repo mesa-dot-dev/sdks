@@ -310,7 +310,6 @@ response = await list_repos.asyncio_detailed("acme", client=client)
 | `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Signing private key for trusted processes |
 | `auth` | `MesaAuth \| None` | `None` | A private key or an access token, passed as one object |
 | `api_url` | `str` | `https://api.mesa.dev/v1` | Base URL for the Mesa API |
-| `vcs_url` | `str \| None` | `None` | Optional VCS gateway override. Only use when self-hosting Mesa. |
 | `org` | `str \| None` | Read from the credential | Optional organization check. It must match the organization encoded in the credential. |
 | `user_agent` | `str \| None` | `None` | Custom user agent suffix |
 | `webhook_secret` | `str \| None` | `None` | Secret used by `mesa.webhooks.receive(...)` |

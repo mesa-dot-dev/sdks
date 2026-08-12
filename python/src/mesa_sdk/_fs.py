@@ -750,7 +750,6 @@ class FsNamespace:
             repos=repo_configs,
             mounted_repos=[r.name for r in repo_configs],
             api_base_url=self._mesa.api_url,
-            vcs_url=self._mesa.vcs_url,
             disk_cache=disk_cache,
         )
         async with self._connect_and_flush(config) as fs:
@@ -793,7 +792,6 @@ class FsNamespace:
             layout=str(layout),
             mounted_repos="all",
             api_base_url=self._mesa.api_url,
-            vcs_url=self._mesa.vcs_url,
             disk_cache=disk_cache,
         )
         async with self._connect_and_flush(config) as fs:

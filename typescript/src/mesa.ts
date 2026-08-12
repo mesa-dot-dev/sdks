@@ -216,7 +216,6 @@ export interface MesaOptions {
   /** Grouped private-key or signing-key access-token authentication. */
   auth?: MesaAuth;
   apiUrl?: string;
-  vcsUrl?: string;
   /** The organization is derived from the credential. If supplied, this value must match it. */
   org?: string;
   fetch?: typeof globalThis.fetch;
@@ -303,7 +302,6 @@ type MesaFs<TOptions extends MesaOptions> = CredentialSpecific<
 
 export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
   readonly apiUrl: string;
-  readonly vcsUrl: string;
   readonly org: ApiResources['org'];
   readonly tokens: MesaTokens<TOptions>;
   /**
@@ -340,7 +338,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     this.credential = resolvedCredential;
 
     this.apiUrl = normalizeUrl(options.apiUrl?.trim() || DEFAULT_API_URL);
-    this.vcsUrl = normalizeUrl(options.vcsUrl?.trim() || new URL(this.apiUrl).origin);
     if (options.userAgent && looksLikePrivateKey(options.userAgent)) {
       throw new InvalidOptionsError('User-agent metadata must not contain Mesa private key material.');
     }
@@ -522,7 +519,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       credential,
       cache: fsOptions.cache,
       apiBaseUrl: this.apiUrl,
-      vcsUrl: this.vcsUrl,
       telemetry: fsOptions.telemetry,
     };
     // The canonical repos profile keeps explicit repo visibility; the layout

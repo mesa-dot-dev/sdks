@@ -53,7 +53,6 @@ export interface NativeConfig {
     diskCache?: { path: string; maxSizeBytes?: number };
   };
   apiBaseUrl?: string;
-  vcsUrl?: string;
   telemetry?: NativeTelemetryConfig;
 }
 

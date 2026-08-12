@@ -40,7 +40,6 @@ This package exposes org-inferred REST resources under `mesa.*`.
 - `privateKey?: string` (falls back to `MESA_PRIVATE_KEY` in Node)
 - `auth?: { privateKey } | { accessToken }`
 - `apiUrl?: string` (defaults to `https://api.mesa.dev/v1`)
-- `vcsUrl?: string` (optional VCS gateway override; only use when self-hosting Mesa)
 - `org?: string` (optional organization check; it has to match the organization the credential already names)
 - `fetch?: typeof fetch`
 - `userAgent?: string`
