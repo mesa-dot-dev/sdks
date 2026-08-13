@@ -10,10 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Remove `mesa.fs.mount(repos=...)`. Use a layout definition instead: `mesa.fs(layout=..., authors=..., ttl=...).mount(disk_cache=...)`
+- **Breaking:** Change `repo()` to pin a revision with a nested `at={"bookmark": ...}` or `at={"change_id": ...}` instead of top-level `bookmark` / `change_id`
+
+### Added
+
+- Add `branched_from` to `repo()` to fork a new change the first time the mount opens the repo. Use `as={"bookmark": ..., "describe": ...}` to name and describe the fork, or omit it to fork an anonymous tip
+
 ### Removed
 
 - **Breaking:** Remove `org` from the Python SDK constructor and resource methods; the SDK derives the organization from the credential
 - **Breaking:** Remove `vcs_url` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
+
+### Fixed
+
+- Fix Python type checking allowing layout `repo()` declarations to set both `at` and `branched_from`
+- Fix `repo()` `at` pins being overridden when the organization's configuration forks the repo on open
+- Fix layout `repo()` silently dropping unrecognized keys in `at`, `branched_from`, and `branched_from["as"]`; a misspelled key such as `changeId` now raises instead of pinning the wrong revision
+- Fix layout `repo()` accepting an `"org/repo"` selector; a name containing `/` now raises with the organization prefix removed, instead of failing at mount time as an unresolvable repository
 
 ## [0.45.0] - 2026-08-11
 

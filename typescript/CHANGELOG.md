@@ -10,10 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Remove `mesa.fs.mount({ repos })`. Use a layout definition instead: `mesa.fs({ layout, authors, ttl }).mount({ cache, telemetry })`
+- **Breaking:** Remove `FsMountReposOptions`. `mount()` now only accepts `cache` and `telemetry`; pass `ttl` and `authors` to `mesa.fs()` instead
+- **Breaking:** Change `repo()` to pin a revision with a nested `at: { bookmark }` or `at: { changeId }` instead of top-level `bookmark` / `changeId`
+
+### Added
+
+- Add `branchedFrom` to `repo()` to fork a new change the first time the mount opens the repo. Use `as: { bookmark, describe }` to name and describe the fork, or omit it to fork an anonymous tip
+
 ### Removed
 
 - **Breaking:** Remove `org` from the TypeScript SDK constructor and resource methods; the SDK derives the organization from the credential
 - **Breaking:** Remove `vcsUrl` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
+
+### Fixed
+
+- Fix `repo()` `at` pins being overridden when the organization's configuration forks the repo on open
 
 ## [0.45.0] - 2026-08-11
 

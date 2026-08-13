@@ -164,60 +164,70 @@ async def mesa_webhook(request: Request):
 
 ### Virtual Filesystem
 
-Mount repositories as a local filesystem for direct file I/O. The `mount()` context manager handles setup and teardown automatically.
+Mount repositories as a local filesystem for direct file I/O. Define a layout
+with `mesa.fs(...)`, then open it with `.mount()`. Private-key clients require
+`authors`; every `repo(...)` requires `mode`.
 
 ```python
-async with mesa.fs.mount(
-    repos=["my-repo"],
+from mesa_sdk import repo
+
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
-    data = await fs.read("/my-org/my-repo/src/main.py")
-    await fs.write("/my-org/my-repo/src/new_file.py", b"print('hello')")
-    entries = await fs.readdir("/my-org/my-repo/src")
+).mount() as fs:
+    data = await fs.read("/workspace/src/main.py")
+    await fs.write("/workspace/src/new_file.py", b"print('hello')")
+    entries = await fs.readdir("/workspace/src")
 ```
 
 ### Read-only Repos
 
-Pass `RepoConfig(..., mode="ro")` to mount a repo read-only. Writes to it raise `OSError: [Errno 30] Read-only file system`. A single mount can mix read-only and writable repos.
+Pass `mode="ro"` to reject writes with `OSError: [Errno 30] Read-only file system`.
+A single layout can mix read-only and writable repos.
 
 ```python
-from mesa_sdk import RepoConfig
+from mesa_sdk import repo
 
-async with mesa.fs.mount(
-    repos=[RepoConfig("my-repo", mode="ro")],
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="ro")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
-    data = await fs.read("/my-org/my-repo/README.md")
+).mount() as fs:
+    data = await fs.read("/workspace/README.md")
 ```
 
 ### Multiple Repos
 
-Mount several repositories at once. Each repo appears as a top-level directory.
+Declare several repositories in one layout. Each appears at the path you choose.
 
 ```python
-async with mesa.fs.mount(
-    repos=["repo-a", "repo-b"],
+from mesa_sdk import repo
+
+async with mesa.fs(
+    layout={
+        "/a": repo("repo-a", mode="rw"),
+        "/b": repo("repo-b", mode="rw"),
+    },
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
-    a = await fs.read("/repo-a/file.txt")
-    b = await fs.read("/repo-b/file.txt")
+).mount() as fs:
+    a = await fs.read("/a/file.txt")
+    b = await fs.read("/b/file.txt")
 ```
 
-### Pin to Bookmark or Change
+### Pin to Bookmark, Change, or Fork-on-open
 
-Use `RepoConfig` with `at` to pin a mount to a specific bookmark or change.
+Use `at={"bookmark": ...}`, `at={"change_id": ...}`, or `branched_from` on `repo(...)`.
 
 ```python
-from mesa_sdk import RepoConfig
+from mesa_sdk import repo
 
-async with mesa.fs.mount(
-    repos=[
-        RepoConfig("my-repo", at={"bookmark": "feature-x"}),
-        RepoConfig("other-repo", at={"change_id": "abc123"}),
-    ],
+async with mesa.fs(
+    layout={
+        "/workspace": repo("my-repo", mode="rw", at={"bookmark": "feature-x"}),
+        "/other": repo("other-repo", mode="ro", at={"change_id": "abc123"}),
+    },
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
-    data = await fs.read("/my-org/my-repo/file.txt")
+).mount() as fs:
+    data = await fs.read("/workspace/file.txt")
 ```
 
 ### Bash
@@ -225,11 +235,13 @@ async with mesa.fs.mount(
 Run shell commands inside the mounted filesystem with `fs.bash()`.
 
 ```python
-async with mesa.fs.mount(
-    repos=["my-repo"],
+from mesa_sdk import repo
+
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
-    bash = fs.bash(env={"FOO": "bar"}, cwd="/my-org/my-repo", timeout_ms=30000)
+).mount() as fs:
+    bash = fs.bash(env={"FOO": "bar"}, cwd="/workspace", timeout_ms=30000)
     result = await bash.exec("ls -la")
     print(result.stdout, result.stderr, result.exit_code)
 ```
@@ -241,10 +253,12 @@ async with mesa.fs.mount(
 Create and manage changes and bookmarks directly from a mounted filesystem.
 
 ```python
-async with mesa.fs.mount(
-    repos=["my-repo"],
+from mesa_sdk import repo
+
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
+).mount() as fs:
     # Changes
     change = await fs.changes.new("my-repo", bookmark="main")
     change = await fs.changes.edit("my-repo", change_id="abc123")
@@ -259,17 +273,18 @@ async with mesa.fs.mount(
 
 ### Disk Cache
 
-Enable on-disk caching to speed up repeated mounts.
+Enable on-disk caching on `.mount(...)` to speed up repeated mounts.
 
 ```python
-from mesa_sdk import DiskCacheConfig
+from mesa_sdk import DiskCacheConfig, repo
 
-async with mesa.fs.mount(
-    repos=["my-repo"],
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+).mount(
     disk_cache=DiskCacheConfig(path="/tmp/mesa-cache", max_size_bytes=1_000_000_000),
 ) as fs:
-    data = await fs.read("/my-org/my-repo/file.txt")
+    data = await fs.read("/workspace/file.txt")
 ```
 
 ### Filesystem Errors

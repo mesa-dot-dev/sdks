@@ -19,6 +19,24 @@ export type MountMode = 'ro' | 'rw';
  */
 export type RepoSelectorInput = string | { name: string };
 
+/** Exactly one of `bookmark` or `changeId` (TypeScript exclusive union). */
+export type RevisionIdentifier = { bookmark: string; changeId?: never } | { bookmark?: never; changeId: string };
+
+export type MountRevisionProperties = {
+  /** Optional; omit for an anonymous (unbookmarked) tip. */
+  bookmark?: string;
+  describe?: string | null;
+};
+
+/**
+ * Fork-on-open declaration: parent tip plus optional bookmark/describe on
+ * the new empty descendant.
+ */
+export type BranchedRevision = RevisionIdentifier & {
+  /** Optional; omit `as` or `as.bookmark` for an anonymous tip. */
+  as?: MountRevisionProperties;
+};
+
 /** Options for one repository declaration. */
 export type RepoOptions = {
   /** Read-only or read-write presentation. Always explicit. */
@@ -27,23 +45,45 @@ export type RepoOptions = {
   alias?: string;
   /** Nested mounts declared beneath this repository's path. */
   subPaths?: Record<string, Repo | Repo[]>;
-} & ({ bookmark?: string; changeId?: never } | { bookmark?: never; changeId: string });
+} & (
+  | {
+      /** Pin an existing revision. Mutually exclusive with `branchedFrom`. */
+      at?: RevisionIdentifier;
+      branchedFrom?: never;
+    }
+  | {
+      /** Fork-on-open requires a writable mount. */
+      mode: 'rw';
+      at?: never;
+      branchedFrom: BranchedRevision;
+    }
+);
 
 /**
  * One repository declaration in serialized `LayoutSpec` form. Produced by
  * {@link repo}; do not construct by hand.
  */
-export interface Repo {
+export type Repo = {
   /** What this entry mounts; always `'repo'` today. */
   readonly kind: 'repo';
   /** Repository name within the mount's organization. */
   readonly name: string;
   readonly mode: MountMode;
-  readonly bookmark?: string;
-  readonly changeId?: string;
   readonly alias?: string;
   readonly subPaths?: Record<string, Repo | Repo[]>;
-}
+} & (
+  | {
+      /** Pin an existing revision. Mutually exclusive with `branchedFrom`. */
+      readonly at?: RevisionIdentifier;
+      readonly branchedFrom?: never;
+    }
+  | {
+      /** Fork-on-open requires a writable mount. */
+      readonly mode: 'rw';
+      readonly at?: never;
+      readonly branchedFrom: BranchedRevision;
+    }
+);
 
 /**
  * The mount-layout schema: a pure path map. Every key is an absolute
@@ -78,20 +118,67 @@ export function repo(selector: RepoSelectorInput, options: RepoOptions): Repo {
   if (name.length === 0) {
     throw new Error('repo(): repository name must not be empty');
   }
+  if (name.includes('/')) {
+    // A layout entry names a repository within the client's organization, so
+    // a slash can only be an "org/repo" selector. Left unchecked it is signed
+    // into the token verbatim and fails as an opaque repo-not-found at mount.
+    throw new Error(
+      `repo(): repository name '${name}' must not contain '/'. Cross-org mounts are not supported; pass '${name.slice(name.indexOf('/') + 1)}' without the organization prefix.`
+    );
+  }
   if (options.mode !== 'ro' && options.mode !== 'rw') {
     throw new Error(`repo(): mode must be 'ro' or 'rw'`);
   }
-  if (options.bookmark !== undefined && options.changeId !== undefined) {
-    throw new Error('repo(): bookmark and changeId are mutually exclusive');
+  if (options.at !== undefined && options.branchedFrom !== undefined) {
+    throw new Error('repo(): at and branchedFrom are mutually exclusive');
   }
-  return {
+  if (options.at !== undefined) {
+    if (options.at.bookmark !== undefined && options.at.changeId !== undefined) {
+      throw new Error('repo(): at.bookmark and at.changeId are mutually exclusive');
+    }
+    if (options.at.bookmark === undefined && options.at.changeId === undefined) {
+      throw new Error('repo(): at requires a bookmark or changeId');
+    }
+  }
+  if (options.branchedFrom !== undefined) {
+    if (options.mode !== 'rw') {
+      throw new Error('repo(): branchedFrom requires mode "rw"');
+    }
+    const parent = options.branchedFrom;
+    if (parent.bookmark !== undefined && parent.changeId !== undefined) {
+      throw new Error('repo(): branchedFrom.bookmark and branchedFrom.changeId are mutually exclusive');
+    }
+    if (parent.bookmark === undefined && parent.changeId === undefined) {
+      throw new Error('repo(): branchedFrom requires a parent bookmark or changeId');
+    }
+  }
+  const declaration = {
     kind: 'repo',
     name,
     mode: options.mode,
-    ...(options.bookmark !== undefined && { bookmark: options.bookmark }),
-    ...(options.changeId !== undefined && { changeId: options.changeId }),
+  } as const;
+  const nested = {
     ...(options.alias !== undefined && { alias: options.alias }),
     ...(options.subPaths !== undefined && { subPaths: options.subPaths }),
+  };
+
+  // Copy revision selections so mutating the caller's options object later
+  // cannot silently rewrite the declaration.
+  if (options.branchedFrom !== undefined) {
+    return {
+      ...declaration,
+      mode: options.mode,
+      branchedFrom: {
+        ...options.branchedFrom,
+        ...(options.branchedFrom.as !== undefined && { as: { ...options.branchedFrom.as } }),
+      },
+      ...nested,
+    };
+  }
+  return {
+    ...declaration,
+    ...(options.at !== undefined && { at: { ...options.at } }),
+    ...nested,
   };
 }
 

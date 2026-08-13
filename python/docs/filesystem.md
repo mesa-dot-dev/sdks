@@ -14,15 +14,16 @@ Set `MESA_PRIVATE_KEY` in your environment, or pass it directly:
 
 ```python
 import asyncio
-from mesa_sdk import Mesa
+import os
+from mesa_sdk import Mesa, repo
 
 async def main():
-    async with Mesa() as mesa:
-        async with mesa.fs.mount(
-            repos=["my-repo"],
+    async with Mesa(private_key=os.environ["MESA_PRIVATE_KEY"]) as mesa:
+        async with mesa.fs(
+            layout={"/workspace": repo("my-repo", mode="rw")},
             authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-        ) as fs:
-            data = await fs.read("/my-repo/README.md")
+        ).mount() as fs:
+            data = await fs.read("/workspace/README.md")
             print(data.decode())
 
 asyncio.run(main())
@@ -30,63 +31,85 @@ asyncio.run(main())
 
 ## How mounting works
 
-`mesa.fs.mount()` is an async context manager. When you enter it, the SDK:
+Every mount has a **layout**: a map of absolute paths to `repo(...)`
+declarations. Call `mesa.fs(layout=..., authors=..., ttl=...)` to build a
+`LayoutDefinition`, then `.mount()` to open it.
 
-1. Signs one short-lived, repo-scoped access token (JWT) locally from your
-   private key. The token's repo scope is encoded as full `org/repo` names, so signing
-   does not resolve repo names to ids over the network.
-2. Connects to the Mesa VCS backend and yields a `MesaFileSystem`.
+`definition.mount()` is an async context manager. When you enter it, the SDK:
+
+1. Signs one short-lived, layout-scoped access token (JWT) locally from your
+   private key (or API key). The token's repo scope is encoded as full
+   `org/repo` names collected from the layout. Scopes are `["read"]` when every
+   declaration is `"ro"`, otherwise `["read", "write"]`.
+2. Connects to the Mesa VCS backend and yields a `MesaFileSystem` whose
+   namespace is exactly the layout paths.
 
 The mount uses that single token for its whole lifetime. There is no background
 refresh and no credential hot-swap: when the token expires, the mount stops
-authenticating. The access token expires on its own — it cannot be revoked and
-does not leak indefinitely. When the context exits (normally or on error), the
-SDK flushes pending filesystem writes. There is no key to revoke.
+authenticating. When the context exits (normally or on error), the SDK flushes
+pending filesystem writes.
 
 ```python
-async with mesa.fs.mount(
-    repos=["my-repo"],
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-) as fs:
+).mount() as fs:
     # fs is a MesaFileSystem — use it here
     ...
 # pending writes flushed, connection closed; the token self-expires
 ```
 
-Every file path inside the mount starts with a leading slash and the repo name:
-`/my-repo/src/main.py`.
+Paths inside the mount are whatever the layout declares — for example
+`/workspace/src/main.py`, not `/org/repo/...`.
 
-### Mount lifetime (`ttl`)
+Private-key clients **require** `authors` on the definition. API-key and
+access-token clients reject `authors`.
 
-Pass `ttl` (seconds) to choose the mount's lifetime up front. The mount mints
-one token with that TTL; once it expires, the mount stops authenticating, so
-pick a value that covers the work the mount will do.
+### Token lifetime (`ttl`)
+
+Pass `ttl` (seconds) on the definition to choose the lifetime of every token it
+mints — both `token()` and the token used under the hood by `mount()`. Once it
+expires, the mount stops authenticating, so pick a value that covers the work.
 
 ```python
 # Mount for 4 hours
-async with mesa.fs.mount(
-    repos=["my-repo"],
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
     authors=[{"name": "Mesa Bot"}],
     ttl=14_400,
-) as fs:
+).mount() as fs:
     ...
 ```
 
-`ttl` defaults to `900` (15 minutes) and is capped at `14_400` (4 hours). A
-value outside that range raises `InvalidOptionsError`.
+`ttl` defaults to `900` (15 minutes) for private-key clients and is capped at
+`14_400` (4 hours). API-key clients default to `3600` (1 hour) up to `86400`
+(24 hours). A value outside the credential's range raises
+`InvalidOptionsError`. Access-token clients cannot set `ttl`.
+
+### Minting a layout token without mounting
+
+```python
+definition = mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
+    authors=[{"name": "Mesa Bot"}],
+    ttl=3600,
+)
+token = (await definition.token()).token
+# Hand token + definition.layout() to a sandbox running `mesa mount --layout`
+```
 
 ## Reading files
 
 `read` returns the raw bytes of a file:
 
 ```python
-raw = await fs.read("/my-repo/config.json")
+raw = await fs.read("/workspace/config.json")
 ```
 
 To work with text, decode the result:
 
 ```python
-text = (await fs.read("/my-repo/README.md")).decode()
+text = (await fs.read("/workspace/README.md")).decode()
 ```
 
 There is no `read_text` method. Always use `read` and decode explicitly.
@@ -97,35 +120,35 @@ There is no `read_text` method. Always use `read` and decode explicitly.
 parent directory must already exist:
 
 ```python
-await fs.write("/my-repo/output.txt", b"hello")
+await fs.write("/workspace/output.txt", b"hello")
 ```
 
 `append` appends to an existing file or creates a new one:
 
 ```python
-await fs.append("/my-repo/log.txt", b"line 1\n")
-await fs.append("/my-repo/log.txt", b"line 2\n")
+await fs.append("/workspace/log.txt", b"line 1\n")
+await fs.append("/workspace/log.txt", b"line 2\n")
 ```
 
 If the parent directory is missing, create it first:
 
 ```python
-await fs.mkdir("/my-repo/new-dir", recursive=True)
-await fs.write("/my-repo/new-dir/file.txt", b"content")
+await fs.mkdir("/workspace/new-dir", recursive=True)
+await fs.write("/workspace/new-dir/file.txt", b"content")
 ```
 
 There is no `write_text` or `append_text` method. Encode strings before passing
 them in:
 
 ```python
-await fs.write("/my-repo/notes.md", "some text".encode())
+await fs.write("/workspace/notes.md", "some text".encode())
 ```
 
 ## Checking existence
 
 ```python
-if await fs.exists("/my-repo/config.yaml"):
-    cfg = await fs.read("/my-repo/config.yaml")
+if await fs.exists("/workspace/config.yaml"):
+    cfg = await fs.read("/workspace/config.yaml")
 ```
 
 `exists` follows symlinks. It returns `False` for dangling symlinks.
@@ -135,7 +158,7 @@ if await fs.exists("/my-repo/config.yaml"):
 `readdir` returns entry names as plain strings:
 
 ```python
-names = await fs.readdir("/my-repo/src")
+names = await fs.readdir("/workspace/src")
 # ["main.py", "utils.py", "tests"]
 ```
 
@@ -147,7 +170,7 @@ Order is not guaranteed. Sort client-side if you need deterministic output.
 symlinks, so you can inspect the symlink itself.
 
 ```python
-info = await fs.stat("/my-repo/src/main.py")
+info = await fs.stat("/workspace/src/main.py")
 print(info.size)          # bytes
 print(info.is_file)       # True
 print(info.is_directory)  # False
@@ -171,29 +194,29 @@ print(info.mtime_ms)      # milliseconds since epoch
 **Copy:**
 
 ```python
-await fs.cp("/my-repo/a.txt", "/my-repo/b.txt")
-await fs.cp("/my-repo/src", "/my-repo/src-backup", recursive=True)
+await fs.cp("/workspace/a.txt", "/workspace/b.txt")
+await fs.cp("/workspace/src", "/workspace/src-backup", recursive=True)
 ```
 
 **Move / rename:**
 
 ```python
-await fs.mv("/my-repo/old.txt", "/my-repo/new.txt")
+await fs.mv("/workspace/old.txt", "/workspace/new.txt")
 ```
 
 **Remove:**
 
 ```python
-await fs.rm("/my-repo/temp.txt")
-await fs.rm("/my-repo/build", recursive=True)
-await fs.rm("/my-repo/maybe-missing.txt", force=True)  # no error if absent
+await fs.rm("/workspace/temp.txt")
+await fs.rm("/workspace/build", recursive=True)
+await fs.rm("/workspace/maybe-missing.txt", force=True)  # no error if absent
 ```
 
 **Create directories:**
 
 ```python
-await fs.mkdir("/my-repo/out")
-await fs.mkdir("/my-repo/a/b/c", recursive=True)  # creates parents
+await fs.mkdir("/workspace/out")
+await fs.mkdir("/workspace/a/b/c", recursive=True)  # creates parents
 ```
 
 ## Symlinks
@@ -201,28 +224,28 @@ await fs.mkdir("/my-repo/a/b/c", recursive=True)  # creates parents
 Create a symlink with `symlink`. The target is stored verbatim:
 
 ```python
-await fs.symlink("../lib/utils.py", "/my-repo/src/utils_link.py")
+await fs.symlink("../lib/utils.py", "/workspace/src/utils_link.py")
 ```
 
 Read the raw target of a symlink:
 
 ```python
-target = await fs.readlink("/my-repo/src/utils_link.py")
+target = await fs.readlink("/workspace/src/utils_link.py")
 # "../lib/utils.py"
 ```
 
 Resolve a path through all symlinks to a canonical absolute path:
 
 ```python
-real = await fs.realpath("/my-repo/src/utils_link.py")
-# "/my-repo/lib/utils.py"
+real = await fs.realpath("/workspace/src/utils_link.py")
+# "/workspace/lib/utils.py"
 ```
 
 `resolve_path` joins and normalizes paths without any I/O:
 
 ```python
-p = fs.resolve_path("/my-repo/src", "../lib/utils.py")
-# "/my-repo/lib/utils.py"
+p = fs.resolve_path("/workspace/src", "../lib/utils.py")
+# "/workspace/lib/utils.py"
 ```
 
 > Hard links are not supported. Calling `fs.link()` raises `NotImplementedError`.
@@ -232,7 +255,7 @@ p = fs.resolve_path("/my-repo/src", "../lib/utils.py")
 Set permission bits with `chmod`:
 
 ```python
-await fs.chmod("/my-repo/run.sh", 0o755)
+await fs.chmod("/workspace/run.sh", 0o755)
 ```
 
 Set access and modification times with `utimes`:
@@ -241,7 +264,7 @@ Set access and modification times with `utimes`:
 import time
 
 now_ms = time.time() * 1000
-await fs.utimes("/my-repo/file.txt", atime_ms=now_ms, mtime_ms=now_ms)
+await fs.utimes("/workspace/file.txt", atime_ms=now_ms, mtime_ms=now_ms)
 ```
 
 > **Warning:** `utimes` takes **milliseconds** since the Unix epoch, not
@@ -253,7 +276,7 @@ await fs.utimes("/my-repo/file.txt", atime_ms=now_ms, mtime_ms=now_ms)
 filesystem. No host shell is spawned.
 
 ```python
-bash = fs.bash(cwd="/my-repo", env={"CI": "true"}, timeout_ms=60_000)
+bash = fs.bash(cwd="/workspace", env={"CI": "true"}, timeout_ms=60_000)
 result = await bash.exec("ls src/ | wc -l")
 print(result.stdout.decode().strip())
 ```
@@ -277,7 +300,7 @@ print(result.stdout.decode().strip())
 Shell pipelines work as expected:
 
 ```python
-result = await bash.exec("grep -r TODO /my-repo/src | sort | head -20")
+result = await bash.exec("grep -r TODO /workspace/src | sort | head -20")
 ```
 
 > **Binary files and `cat`:** If you `cat` a binary (non-UTF-8) file, the
@@ -366,70 +389,83 @@ Merge and move operations are available through the REST API resource
 (`mesa.bookmarks.merge`, `mesa.bookmarks.move`), not through the filesystem
 namespace.
 
-## Mounting multiple repos
+## Multiple repositories and nesting
 
-Pass multiple repo names to mount them side by side. Each repo appears as a
-top-level directory:
+Declare several repositories in one layout. Each appears at the path you choose:
 
 ```python
-async with mesa.fs.mount(repos=["frontend", "backend", "shared"]) as fs:
+async with mesa.fs(
+    layout={
+        "/frontend": repo("frontend", mode="rw"),
+        "/backend": repo("backend", mode="rw"),
+        "/shared": repo("shared", mode="ro"),
+    },
+    authors=[{"name": "Mesa Bot"}],
+).mount() as fs:
     fe = await fs.read("/frontend/package.json")
     be = await fs.read("/backend/pyproject.toml")
     lib = await fs.readdir("/shared/src")
 ```
 
-## Pinning to a bookmark or change
+Nest repositories under another with `sub_paths`, or place several under one
+directory with an array value (optionally with `alias`).
 
-By default, each repo mounts at its default bookmark. Use `RepoConfig` with `at`
-to pin to a specific bookmark or change:
+## Pinning and fork-on-open
+
+Pin a declaration with `at={"bookmark": ...}` or `at={"change_id": ...}`. Use `branched_from` to fork a
+new empty descendant at cold open (requires `mode="rw"`):
 
 ```python
-from mesa_sdk import RepoConfig
-
-async with mesa.fs.mount(repos=[
-    RepoConfig("my-repo", at={"bookmark": "staging"}),
-    RepoConfig("other-repo", at={"change_id": "a1b2c3d4"}),
-    "plain-repo",  # uses default bookmark
-]) as fs:
+async with mesa.fs(
+    layout={
+        "/workspace": repo(
+            "my-repo",
+            mode="rw",
+            branched_from={
+                "bookmark": "main",
+                "as": {"bookmark": "run-27", "describe": "agent run"},
+            },
+        ),
+        "/docs": repo("docs", mode="ro", at={"bookmark": "main"}),
+    },
+    authors=[{"name": "Mesa Bot"}],
+).mount() as fs:
     ...
 ```
 
-`RepoConfig` accepts `name` as a positional argument. `mode`, `at`, and
-`branched_from` are keyword-only:
+When neither pin nor `branched_from` is set, the mount checks out the
+repository's default bookmark.
+
+## Read-only repositories
+
+`mode` is required on every `repo(...)`. Pass `mode="ro"` to reject writes with
+`OSError: [Errno 30] Read-only file system`. A single layout can mix read-only
+and writable repositories:
 
 ```python
-RepoConfig("my-repo", at={"bookmark": "main"})
-RepoConfig("my-repo", at={"change_id": "abc123"})
-RepoConfig("my-repo", mode="ro")
+async with mesa.fs(
+    layout={
+        "/workspace": repo("app", mode="rw"),
+        "/skills": repo("skills", mode="ro"),
+    },
+    authors=[{"name": "Mesa Bot"}],
+).mount() as fs:
+    data = await fs.read("/skills/README.md")  # works
+    await fs.write("/skills/x.txt", b"nope")   # raises OSError
 ```
-
-## Read-only repos
-
-Pass `RepoConfig(..., mode="ro")` to mount a repo read-only. Any write to it
-raises `OSError: [Errno 30] Read-only file system`. A single mount can mix
-read-only and writable repos:
-
-```python
-from mesa_sdk import RepoConfig
-
-async with mesa.fs.mount(repos=[RepoConfig("my-repo", mode="ro")]) as fs:
-    data = await fs.read("/my-repo/README.md")  # works
-    await fs.write("/my-repo/x.txt", b"nope")   # raises OSError
-```
-
-Read-only is enforced client-side by the mesa daemon, so even a bug in your code
-cannot modify the repo through the mount.
 
 ## Disk caching
 
 By default the mount uses an in-memory cache only. For long-running processes or
-repeated mounts, enable on-disk caching with `DiskCacheConfig`:
+repeated mounts, enable on-disk caching on `.mount(...)`:
 
 ```python
 from mesa_sdk import DiskCacheConfig
 
-async with mesa.fs.mount(
-    repos=["my-repo"],
+async with mesa.fs(
+    layout={"/workspace": repo("my-repo", mode="rw")},
+    authors=[{"name": "Mesa Bot"}],
+).mount(
     disk_cache=DiskCacheConfig("/tmp/mesa-cache", max_size_bytes=1_000_000_000),
 ) as fs:
     ...
@@ -454,17 +490,17 @@ Filesystem operations raise standard Python exceptions, not `MesaError`:
 import errno
 
 try:
-    data = await fs.read("/my-repo/missing.txt")
+    data = await fs.read("/workspace/missing.txt")
 except FileNotFoundError:
     print("file does not exist")
 
 try:
-    await fs.mkdir("/my-repo/existing-dir")
+    await fs.mkdir("/workspace/existing-dir")
 except FileExistsError:
     print("directory already exists")
 
 try:
-    await fs.write("/my-repo/file.txt", b"data")
+    await fs.write("/workspace/file.txt", b"data")
 except OSError as exc:
     if exc.errno == errno.EROFS:
         print("repo is read-only")
@@ -499,24 +535,28 @@ with `bash`, and prints the results:
 
 ```python
 import asyncio
-from mesa_sdk import Mesa
+import os
+from mesa_sdk import Mesa, repo
 
 async def main():
-    async with Mesa() as mesa:
-        async with mesa.fs.mount(repos=["my-repo"]) as fs:
+    async with Mesa(private_key=os.environ["MESA_PRIVATE_KEY"]) as mesa:
+        async with mesa.fs(
+            layout={"/workspace": repo("my-repo", mode="rw")},
+            authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
+        ).mount() as fs:
             # Create a new change from the main bookmark
             change_id = await fs.changes.new("my-repo", bookmark="main")
             print(f"working on change {change_id}")
 
             # Write a module and a test
-            await fs.mkdir("/my-repo/src", recursive=True)
-            await fs.write("/my-repo/src/greet.py", b"""\
+            await fs.mkdir("/workspace/src", recursive=True)
+            await fs.write("/workspace/src/greet.py", b"""\
 def greet(name: str) -> str:
     return f"Hello, {name}!"
 """)
 
-            await fs.mkdir("/my-repo/tests", recursive=True)
-            await fs.write("/my-repo/tests/test_greet.py", b"""\
+            await fs.mkdir("/workspace/tests", recursive=True)
+            await fs.write("/workspace/tests/test_greet.py", b"""\
 from src.greet import greet
 
 def test_greet():
@@ -525,8 +565,8 @@ def test_greet():
 
             # Run pytest via bash
             bash = fs.bash(
-                cwd="/my-repo",
-                env={"PYTHONPATH": "/my-repo"},
+                cwd="/workspace",
+                env={"PYTHONPATH": "/workspace"},
                 timeout_ms=60_000,
             )
             result = await bash.exec("python -m pytest tests/ -v")
@@ -542,6 +582,25 @@ asyncio.run(main())
 ```
 
 ## API reference
+
+### LayoutDefinition (`mesa.fs(...)`)
+
+| Member | Signature | Returns |
+|---|---|---|
+| `layout` | `()` | `Layout` |
+| `mount` | `(*, disk_cache: DiskCacheConfig \| None = None)` | async context manager → `MesaFileSystem` |
+| `token` | `()` | `TokenCreateResult` |
+
+### `repo(...)`
+
+| Parameter | Type | Notes |
+|---|---|---|
+| `selector` | `str \| RepoName` | Repository name |
+| `mode` | `"rw" \| "ro"` | **Required** |
+| `at` | `Mapping \| None` | Pin: `{"bookmark": ...}` or `{"change_id": ...}`; mutually exclusive with `branched_from` |
+| `branched_from` | `Mapping \| None` | Fork-on-open; requires `mode="rw"` |
+| `alias` | `str \| None` | Array-element directory name override |
+| `sub_paths` | `Mapping \| None` | Nested layout under this repo |
 
 ### MesaFileSystem
 
@@ -589,10 +648,11 @@ All methods except `resolve_path`, `link`, and `bash` are `async`.
 
 | Method | Signature | Returns |
 |---|---|---|
-| `new` | `(repo: str, *, bookmark: str \| None = None, change_id: str \| None = None)` | `str` (change hex ID) |
+| `new` | `(repo: str, *, bookmark: str \| None = None, change_id: str \| None = None, message: str \| None = None)` | `str` (change hex ID) |
 | `edit` | `(repo: str, *, bookmark: str \| None = None, change_id: str \| None = None)` | `str` (change hex ID) |
 | `list` | `(repo: str, *, limit: int = 50)` | `list[ChangeInfo]` |
 | `current` | `(repo: str)` | `ChangeInfo` |
+| `checkpoint` | `(repo: str, message: str \| None = None)` | `CheckpointResult` |
 
 All methods are `async`.
 
@@ -601,6 +661,7 @@ All methods are `async`.
 | Method | Signature | Returns |
 |---|---|---|
 | `create` | `(repo: str, name: str)` | `None` |
+| `move` | `(repo: str, name: str, *, change_id: str, allow_backwards: bool = False)` | `None` |
 | `list` | `(repo: str)` | `list[str]` |
 
 All methods are `async`.
@@ -609,5 +670,4 @@ All methods are `async`.
 
 | Type | Constructor |
 |---|---|
-| `RepoConfig` | `(name: str, *, mode: Literal["rw", "ro"] \| None = None, at: Mapping[str, str] \| None = None, branched_from: Mapping[str, object] \| None = None)` |
 | `DiskCacheConfig` | `(path: str, *, max_size_bytes: int \| None = None)` |

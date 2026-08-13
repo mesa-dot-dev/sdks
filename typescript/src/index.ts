@@ -51,7 +51,7 @@ export {
   type WatchEventHandler,
 } from './fs/index.js';
 export * from './lib/errors.js';
-export { type FsLayoutDefinition, type FsMountReposOptions, Mesa, type MesaAuth, type MesaOptions } from './mesa.js';
+export { type FsLayoutDefinition, type FsMountRuntimeOptions, Mesa, type MesaAuth, type MesaOptions } from './mesa.js';
 export {
   type BookmarkCreatedPayload,
   BookmarkCreatedPayloadSchema,

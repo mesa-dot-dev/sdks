@@ -112,8 +112,9 @@ class MesaConfig:
     """Configuration for opening a :class:`MesaFileSystem`.
 
     Most users obtain a config indirectly through
-    :meth:`mesa.fs.mount() <mesa_sdk.FsNamespace.mount>`. Construct this
-    directly only when you manage the bearer credential's lifecycle yourself.
+    :meth:`mesa.fs(layout=...).mount() <mesa_sdk.LayoutDefinition.mount>`.
+    Construct this directly only when you manage the bearer credential's
+    lifecycle yourself.
 
     :param org: The organization slug.
     :param api_key: API key or access token with access to every repo in

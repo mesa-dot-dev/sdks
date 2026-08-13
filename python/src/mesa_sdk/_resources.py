@@ -859,7 +859,7 @@ class Bookmarks:
     """Bookmark management: ``mesa.bookmarks``.
 
     Bookmarks are named refs analogous to git branches. For mounted-FS
-    bookmark operations, see ``mesa.fs.mount(...).bookmarks`` instead.
+    bookmark operations, see ``mesa.fs(layout=...).mount().bookmarks`` instead.
     """
 
     def __init__(
@@ -1024,7 +1024,7 @@ class Bookmarks:
 class Changes:
     """Change management via the REST API: ``mesa.changes``.
 
-    For mounted-FS change operations, see ``mesa.fs.mount(...).changes``.
+    For mounted-FS change operations, see ``mesa.fs(layout=...).mount().changes``.
     """
 
     def __init__(

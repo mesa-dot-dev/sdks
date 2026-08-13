@@ -23,12 +23,7 @@ import {
 import { looksLikePrivateKey } from './api/credentials.js';
 import { parsePrivateKey, type PrivateKeyCredential } from './api/signing-key.js';
 import { createLayout, type Layout, type LayoutSpec, type Repo } from './fs/layout.js';
-import {
-  MesaFileSystem,
-  type MesaFileSystemConfig,
-  type RepoConfig,
-  type TelemetryConfig,
-} from './fs/mesa-file-system.js';
+import { MesaFileSystem, type MesaFileSystemConfig, type TelemetryConfig } from './fs/mesa-file-system.js';
 import { InvalidApiUrlError, InvalidOptionsError, MissingCredentialError, OrgResolutionError } from './lib/errors.js';
 
 const DEFAULT_API_URL = 'https://api.mesa.dev/v1';
@@ -224,30 +219,12 @@ export interface MesaOptions {
 type RejectUnknownMesaOptions<TOptions extends MesaOptions> =
   Exclude<keyof TOptions, keyof MesaOptions> extends never ? [] : [invalidOptions: never];
 
-interface FsMountBaseOptions {
+/** Non-token options accepted by {@link FsLayoutDefinition.mount}. */
+export interface FsMountRuntimeOptions {
   cache?: {
     diskCache?: { path: string; maxSizeBytes?: number };
   };
   telemetry?: TelemetryConfig;
-  /**
-   * Lifetime of the mount token, in seconds. Private-key clients default to
-   * 15 minutes and allow up to four hours. There is no refresh; once the token
-   * expires, the mount fails closed.
-   */
-  ttl?: number;
-}
-
-/**
- * Canonical mount profile: present exactly the listed repositories at their
- * `/org/repo` paths — no custom namespace, no whole-org enumeration. Tokens
- * are name-scoped and signed fully offline (no resolution round-trips
- * before the mount), and per-repo `mode: 'ro'` is enforced by the daemon.
- * Layouts mount through a definition instead: `mesa.fs({ layout }).mount()`.
- */
-export interface FsMountReposOptions extends FsMountBaseOptions {
-  /** Repos to mount at their canonical `/org/repo` paths. */
-  repos: RepoConfig[];
-  layout?: never;
 }
 
 /**
@@ -265,7 +242,7 @@ export interface FsLayoutDefinition {
    * mount options (`cache`, `telemetry`). The mount's token lifetime is the
    * definition's `ttl`.
    */
-  mount(options?: Omit<FsMountReposOptions, 'repos' | 'layout' | 'ttl'>): Promise<MesaFileSystem>;
+  mount(options?: FsMountRuntimeOptions): Promise<MesaFileSystem>;
   /**
    * Mint the layout-scoped, least-privilege access token: repositories
    * collected from every declaration and scoped by name, `['read']` when
@@ -276,26 +253,28 @@ export interface FsLayoutDefinition {
 }
 
 type AccessTokenFsLayoutDefinition = Omit<FsLayoutDefinition, 'token'>;
-type PrivateKeyFsMountReposOptions = FsMountReposOptions & { authors: PrivateKeyAuthors };
-type RuntimeFsMountReposOptions = FsMountReposOptions & { authors?: PrivateKeyAuthors };
-type PrivateKeyFsLayoutOptions = { layout: LayoutSpec; ttl?: number; authors: PrivateKeyAuthors };
-type RuntimeFsLayoutOptions = { layout: LayoutSpec; ttl?: number; authors?: PrivateKeyAuthors };
+type PrivateKeyFsLayoutOptions = {
+  layout: LayoutSpec;
+  /**
+   * Lifetime of every token the definition mints, in seconds. Private-key
+   * clients default to 15 minutes and allow up to four hours. There is no
+   * refresh; once the token expires, the mount fails closed.
+   */
+  ttl?: number;
+  authors: PrivateKeyAuthors;
+};
+type RuntimeFsLayoutOptions = {
+  layout: LayoutSpec;
+  ttl?: number;
+  authors?: PrivateKeyAuthors;
+};
 type AccessTokenFsLayoutOptions = { layout: LayoutSpec; authors?: never; ttl?: never };
 
 type MesaFs<TOptions extends MesaOptions> = CredentialSpecific<
   TOptions,
-  {
-    (options: PrivateKeyFsLayoutOptions): FsLayoutDefinition;
-    mount: (options: PrivateKeyFsMountReposOptions) => Promise<MesaFileSystem>;
-  },
-  {
-    (options: AccessTokenFsLayoutOptions): AccessTokenFsLayoutDefinition;
-    mount: (options: Omit<FsMountReposOptions, 'ttl'>) => Promise<MesaFileSystem>;
-  },
-  {
-    (options: RuntimeFsLayoutOptions): FsLayoutDefinition;
-    mount: (options: RuntimeFsMountReposOptions) => Promise<MesaFileSystem>;
-  }
+  (options: PrivateKeyFsLayoutOptions) => FsLayoutDefinition,
+  (options: AccessTokenFsLayoutOptions) => AccessTokenFsLayoutDefinition,
+  (options: RuntimeFsLayoutOptions) => FsLayoutDefinition
 >;
 
 export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
@@ -381,11 +360,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       ttl: number | undefined,
       authors: PrivateKeyAuthors | undefined
     ): Promise<TokensCreateResponse> => {
-      // Run the core structural validator before minting so a malformed
-      // layout fails here with the mount's own error. Repository names
-      // resolve only at mount time — a layout naming a nonexistent
-      // repository still mints a token and fails at mount.
-      MesaFileSystem.validateLayout(layout.toString());
       const { scopes, repos } = await this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
       const tokenInput = { scopes, repos, ttl_seconds: ttl };
       return resources.tokens.create({ ...tokenInput, authors: authors! });
@@ -395,8 +369,21 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       definitionLayout: Layout,
       ttl: number | undefined,
       authors: PrivateKeyAuthors | undefined,
-      options: Omit<FsMountReposOptions, 'repos' | 'layout' | 'ttl'>
+      options: FsMountRuntimeOptions
     ): Promise<MesaFileSystem> => {
+      // Untyped callers migrating from the removed mesa.fs.mount() may still
+      // pass definition options here; dropping them silently would shorten
+      // the token lifetime (or skip authors) with no warning.
+      if ('ttl' in options) {
+        throw new InvalidOptionsError(
+          'mount() does not accept `ttl`. Set it on the definition: mesa.fs({ layout, ttl })'
+        );
+      }
+      if ('authors' in options) {
+        throw new InvalidOptionsError(
+          'mount() does not accept `authors`. Set them on the definition: mesa.fs({ layout, authors })'
+        );
+      }
       const { layout, org, scopes, repos } = await this.deriveLayoutTokenRequest(
         definitionLayout,
         'mesa.fs({ layout }).mount()'
@@ -438,82 +425,27 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       const prepared = createLayout(layout);
       const definition = {
         layout: () => prepared,
-        mount: (options = {}) => mountLayout(prepared, ttl, authors, options),
+        mount: (options: FsMountRuntimeOptions = {}) => mountLayout(prepared, ttl, authors, options),
         token: () => mintLayoutToken(prepared, ttl, authors),
       };
       return definition;
     };
-    this.fs = Object.assign(defineLayout, {
-      /**
-       * Canonical mount profile: mount exactly the listed repositories at
-       * their `/org/repo` paths with explicit repo visibility, a name-scoped
-       * token, and offline signing with no name→id resolution round-trip.
-       * Layouts mount through a definition: `mesa.fs({ layout }).mount()`.
-       */
-      mount: async (fsOptions: RuntimeFsMountReposOptions): Promise<MesaFileSystem> => {
-        const authors = fsOptions.authors === undefined ? undefined : normalizeSigningKeyAuthors(fsOptions.authors);
-        if (this.credential.kind === 'privateKey' && authors === undefined) {
-          throw new InvalidOptionsError('Private-key mounts require a nonempty `authors` option.');
-        }
-        if (this.credential.kind !== 'privateKey' && authors !== undefined) {
-          throw new InvalidOptionsError('Mount authors require a private-key client.');
-        }
-        const canonicalRepos = fsOptions.repos;
-        if (canonicalRepos === undefined) {
-          // Untyped callers may still pass the retired layout form.
-          throw new InvalidOptionsError(
-            'mesa.fs.mount() mounts the canonical repos profile; mount a layout with mesa.fs({ layout }).mount()'
-          );
-        }
-        if (canonicalRepos.length === 0) {
-          throw new InvalidOptionsError('mesa.fs.mount() requires at least one repo');
-        }
-        const org = await this.resolveOrg();
-        if (this.credential.kind === 'accessToken') {
-          if (fsOptions.ttl !== undefined) {
-            throw new InvalidOptionsError(
-              'The lifetime of an existing access token cannot be changed by `fs.mount()`.'
-            );
-          }
-          return this.createFs(org, fsOptions, this.credential.value);
-        }
-        const tokenInput = {
-          scopes: DEFAULT_TOKEN_SCOPES,
-          repos: canonicalRepos.map((r) => `${org}/${r.name}`),
-          ttl_seconds: fsOptions.ttl,
-        };
-        const token = signPrivateKeyAccessToken({
-          credential: this.credential.value,
-          authors: authors!,
-          scopes: tokenInput.scopes,
-          repos: tokenInput.repos,
-          ttlSeconds: tokenInput.ttl_seconds,
-        }).token;
-        return this.createFs(org, fsOptions, token);
-      },
-    }) as MesaFs<TOptions>;
+    this.fs = defineLayout as MesaFs<TOptions>;
   }
 
-  private createFs(
-    org: string,
-    fsOptions: Omit<FsMountReposOptions, 'repos'> & { repos?: RepoConfig[] },
-    credential: string,
-    layout?: Layout
-  ): MesaFileSystem {
-    const base = {
+  private createFs(org: string, fsOptions: FsMountRuntimeOptions, credential: string, layout: Layout): MesaFileSystem {
+    const config: MesaFileSystemConfig = {
       org,
       credential,
       cache: fsOptions.cache,
       apiBaseUrl: this.apiUrl,
       telemetry: fsOptions.telemetry,
+      // Layout mounts present exactly the composed workspace, replacing the
+      // canonical browse tree.
+      repos: [],
+      layout,
+      mountedRepos: 'all',
     };
-    // The canonical repos profile keeps explicit repo visibility; the layout
-    // profile presents exactly the composed workspace, replacing the
-    // canonical browse tree, so per-repo visibility does not apply.
-    const config: MesaFileSystemConfig =
-      layout !== undefined
-        ? { ...base, repos: [], layout, mountedRepos: 'all' }
-        : { ...base, repos: fsOptions.repos ?? [], mountedRepos: (fsOptions.repos ?? []).map((repo) => repo.name) };
     return MesaFileSystem.create(config);
   }
 
@@ -545,6 +477,12 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     if (declarations.length === 0) {
       throw new InvalidOptionsError(`${caller} requires at least one layout repository`);
     }
+    // Run the core structural validator before any token is minted or signed,
+    // for token() and mount() alike, so a malformed layout fails here with
+    // the mount's own error. Repository names resolve only at mount time; a
+    // layout naming a nonexistent repository still derives a request and
+    // fails at mount.
+    MesaFileSystem.validateLayout(layout.toString());
     const repos = [...new Set(declarations.map((declaration) => `${org}/${declaration.name}`))];
     const scopes = declarations.some((declaration) => declaration.mode === 'rw') ? [...DEFAULT_TOKEN_SCOPES] : ['read'];
     return { layout, org, scopes, repos };

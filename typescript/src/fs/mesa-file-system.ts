@@ -19,7 +19,7 @@ import type {
   NativeWatchEvent,
 } from './native-loader.js';
 import { loadNativeAddon } from './native-loader.js';
-import type { Layout } from './layout.js';
+import type { BranchedRevision, Layout, RevisionIdentifier } from './layout.js';
 
 export interface ChangeResult {
   /** Reverse-hex-encoded change ID of the now-active change (JJ format, lowercase letters `k`–`z`). */
@@ -193,19 +193,7 @@ export type MesaBashOptions = Pick<
 
 let nativeModule: NativeModule | null = null;
 
-/** Exactly one of `bookmark` or `changeId` (TypeScript exclusive union). */
-export type RevisionIdentifier = { bookmark: string; changeId?: never } | { bookmark?: never; changeId: string };
-
-export type MountRevisionProperties = {
-  /** Optional; omit for an anonymous (unbookmarked) tip. */
-  bookmark?: string;
-  describe?: string | null;
-};
-
-export type BranchedRevision = RevisionIdentifier & {
-  /** Optional; omit `as` or `as.bookmark` for an anonymous tip. */
-  as?: MountRevisionProperties;
-};
+export type { BranchedRevision, MountRevisionProperties, RevisionIdentifier } from './layout.js';
 
 type RepoConfigBase = {
   name: string;

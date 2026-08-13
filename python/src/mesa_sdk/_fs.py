@@ -16,6 +16,7 @@ from typing import (
     Literal,
     Mapping,
     NoReturn,
+    overload,
     Sequence,
     TypedDict,
     TypeAlias,
@@ -34,7 +35,6 @@ from mesa_sdk._native import (
     DiskCacheConfig,
     FsStat,
     MesaConfig,
-    RepoConfig,
     _NativeMesaFileSystem,  # pyright: ignore[reportPrivateUsage]
     validate_layout,
 )
@@ -92,8 +92,8 @@ class Repo(_RepoRequired, total=False):
     are optional and omitted from the serialized form when unset.
     """
 
-    bookmark: str
-    changeId: str
+    at: Mapping[str, object]
+    branchedFrom: Mapping[str, object]
     alias: str
     subPaths: Mapping[str, "Repo | Sequence[Repo]"]
 
@@ -126,12 +126,52 @@ class Layout:
         return self.spec
 
 
+def _reject_unknown_keys(
+    mapping: Mapping[str, object], allowed: set[str], where: str
+) -> None:
+    """Fail on keys the layout schema does not carry.
+
+    The serialized layout is ``deny_unknown_fields`` on the Rust side, so a
+    misspelled key must not be silently dropped on the way there.
+    """
+    unknown = sorted(set(mapping) - allowed)
+    if unknown:
+        raise ValueError(
+            f"repo(): {where} has unknown key(s) {unknown}; "
+            f"expected {sorted(allowed)}"
+        )
+
+
+@overload
 def repo(
     selector: RepoSelector,
     *,
     mode: _LayoutMountMode,
-    bookmark: str | None = None,
-    change_id: str | None = None,
+    at: Mapping[str, object],
+    branched_from: None = None,
+    alias: str | None = None,
+    sub_paths: Mapping[str, Repo | Sequence[Repo]] | None = None,
+) -> Repo: ...
+
+
+@overload
+def repo(
+    selector: RepoSelector,
+    *,
+    mode: _LayoutMountMode,
+    at: None = None,
+    branched_from: Mapping[str, object] | None = None,
+    alias: str | None = None,
+    sub_paths: Mapping[str, Repo | Sequence[Repo]] | None = None,
+) -> Repo: ...
+
+
+def repo(
+    selector: RepoSelector,
+    *,
+    mode: _LayoutMountMode,
+    at: Mapping[str, object] | None = None,
+    branched_from: Mapping[str, object] | None = None,
     alias: str | None = None,
     sub_paths: Mapping[str, Repo | Sequence[Repo]] | None = None,
 ) -> Repo:
@@ -140,6 +180,12 @@ def repo(
     Select the repository by name, either as a string or a mapping
     containing ``name``. Names are resolved to their canonical repository at
     the service boundary.
+
+    ``at`` pins an existing revision: ``{"bookmark": ...}`` or
+    ``{"change_id": ...}``. ``branched_from`` forks a new empty descendant at
+    cold open (writable only):
+    ``{"bookmark"|"change_id": ..., "as": {"bookmark"?: str, "describe"?: str}}``.
+    The two are mutually exclusive.
     """
     if isinstance(selector, str):
         name = selector
@@ -149,17 +195,78 @@ def repo(
         raise ValueError("repo(): selector must contain 'name'")
     if not name:
         raise ValueError("repo(): repository name must not be empty")
+    if "/" in name:
+        # A layout entry names a repository within the client's organization,
+        # so a slash can only be an "org/repo" selector. Left unchecked it is
+        # signed into the token verbatim and fails as an opaque repo-not-found
+        # at mount time.
+        raise ValueError(
+            f"repo(): repository name {name!r} must not contain '/'. "
+            "Cross-org mounts are not supported; pass "
+            f"'{name.split('/', 1)[1]}' without the organization prefix."
+        )
 
     if mode not in ("ro", "rw"):
         raise ValueError("repo(): mode must be 'ro' or 'rw'")
-    if bookmark is not None and change_id is not None:
-        raise ValueError("repo(): bookmark and change_id are mutually exclusive")
+    if at is not None and branched_from is not None:
+        raise ValueError("repo(): at and branched_from are mutually exclusive")
+    if at is not None:
+        _reject_unknown_keys(at, {"bookmark", "change_id"}, "at")
+        at_bookmark = at.get("bookmark")
+        at_change_id = at.get("change_id")
+        if at_bookmark is not None and at_change_id is not None:
+            raise ValueError("repo(): at.bookmark and at.change_id are mutually exclusive")
+        if at_bookmark is None and at_change_id is None:
+            raise ValueError("repo(): at requires a bookmark or change_id")
+    if branched_from is not None:
+        if mode != "rw":
+            raise ValueError('repo(): branched_from requires mode "rw"')
+        _reject_unknown_keys(
+            branched_from, {"bookmark", "change_id", "as"}, "branched_from"
+        )
+        parent_bookmark = branched_from.get("bookmark")
+        parent_change_id = branched_from.get("change_id")
+        if parent_bookmark is not None and parent_change_id is not None:
+            raise ValueError(
+                "repo(): branched_from.bookmark and branched_from.change_id "
+                "are mutually exclusive"
+            )
+        if parent_bookmark is None and parent_change_id is None:
+            raise ValueError(
+                "repo(): branched_from requires a parent bookmark or change_id"
+            )
+        as_fields = branched_from.get("as")
+        if as_fields is not None:
+            if not isinstance(as_fields, Mapping):
+                raise ValueError("repo(): branched_from['as'] must be a mapping")
+            _reject_unknown_keys(
+                as_fields, {"bookmark", "describe"}, "branched_from['as']"
+            )
 
     declaration: Repo = {"kind": "repo", "name": name, "mode": mode}
-    if bookmark is not None:
-        declaration["bookmark"] = bookmark
-    if change_id is not None:
-        declaration["changeId"] = change_id
+    if at is not None:
+        serialized_at: dict[str, object] = {}
+        if "bookmark" in at:
+            serialized_at["bookmark"] = at["bookmark"]
+        if "change_id" in at:
+            serialized_at["changeId"] = at["change_id"]
+        declaration["at"] = serialized_at
+    if branched_from is not None:
+        branch: dict[str, object] = {}
+        if "bookmark" in branched_from:
+            branch["bookmark"] = branched_from["bookmark"]
+        if "change_id" in branched_from:
+            branch["changeId"] = branched_from["change_id"]
+        as_fields = branched_from.get("as")
+        if isinstance(as_fields, Mapping):
+            serialized_as: dict[str, object] = {}
+            if "bookmark" in as_fields:
+                serialized_as["bookmark"] = as_fields["bookmark"]
+            if "describe" in as_fields:
+                serialized_as["describe"] = as_fields["describe"]
+            if serialized_as:
+                branch["as"] = serialized_as
+        declaration["branchedFrom"] = branch
     if alias is not None:
         declaration["alias"] = alias
     if sub_paths is not None:
@@ -319,7 +426,7 @@ class BookmarksOps:
 class MesaFileSystem:
     """Mesa virtual filesystem.
 
-    Construct via :meth:`mesa.fs.mount() <FsNamespace.mount>`.
+    Construct via :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`.
 
     Filesystem errors raise Python's built-in exceptions
     (:exc:`FileNotFoundError`, :exc:`IsADirectoryError`,
@@ -341,7 +448,7 @@ class MesaFileSystem:
     async def _close(self) -> None:
         """Flush pending writes before mount teardown.
 
-        This is intentionally private; :meth:`mesa.fs.mount() <FsNamespace.mount>`
+        This is intentionally private; :meth:`LayoutDefinition.mount`
         owns the lifecycle for user-facing mounts.
         """
         await self._native._close()
@@ -350,7 +457,7 @@ class MesaFileSystem:
     async def connect(cls, config: MesaConfig) -> "MesaFileSystem":
         """Open a filesystem from a :class:`MesaConfig`.
 
-        Most users want :meth:`mesa.fs.mount() <FsNamespace.mount>`,
+        Most users want :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`,
         which manages credentials for you. Use this only when you already
         own the credential's lifecycle.
         """
@@ -662,100 +769,6 @@ class FsNamespace:
         return LayoutDefinition(self, Layout(layout), ttl, authors)
 
     @asynccontextmanager
-    async def mount(
-        self,
-        *,
-        repos: Sequence[str | RepoConfig],
-        authors: list[SigningKeyAuthor] | None = None,
-        ttl: int | None = None,
-        disk_cache: DiskCacheConfig | None = None,
-    ) -> AsyncIterator[MesaFileSystem]:
-        """Mount repositories at their canonical ``/org/repo`` paths.
-
-        Private-key clients sign one short-lived, repo-scoped access token
-        locally and use it for the lifetime of the mount. Existing access-token
-        clients forward that token unchanged. Once the token expires the mount
-        stops authenticating, so choose a ``ttl`` that covers the mount's work.
-        Layouts mount through a definition instead:
-        ``mesa.fs(layout={...}).mount()``.
-
-        Example::
-
-            async with Mesa() as mesa:
-                async with mesa.fs.mount(repos=["my-repo"]) as fs:
-                    data = await fs.read("/my-org/my-repo/README.md")
-                    result = await fs.bash().exec("ls /my-org/my-repo")
-
-        Mark individual repos read-only by passing a
-        :class:`~mesa_sdk.RepoConfig` with ``mode="ro"``; the mesa
-        daemon then rejects writes to that repo with EROFS while other
-        repos in the same mount stay writable.
-
-        Prefer ``at={"bookmark"|"change_id": ...}`` to open an existing
-        revision, or ``branched_from={...}`` to fork a new revision at
-        mount time (writable only; pass ``as={"bookmark": ...}`` to name
-        it, or omit ``as.bookmark`` for an anonymous tip).
-
-        :param repos: Canonical mount profile — mount exactly the given repos
-            at their ``/org/repo`` paths: no custom namespace, no whole-org
-            enumeration, name-scoped offline token signing (no resolution
-            round-trips before the mount), and per-repo revision pinning /
-            branching and read-only control enforced by the daemon.
-        :param authors: Ordered, nonempty commit attribution required for a
-            private-key mount. Other credential types do not accept it.
-        :param ttl: Access-token lifetime in seconds. Private-key mounts default
-            to 900 and allow up to 14400. It cannot be set for an existing
-            access token.
-        :param disk_cache: Optional on-disk cache placement. When
-            ``None``, only the in-memory cache is used.
-
-        :raises InvalidOptionsError: If ``repos`` is empty or ``ttl`` is
-            out of range.
-
-        .. warning::
-           Not fork-safe. When using :mod:`multiprocessing`, set the
-           start method to ``"spawn"`` or ``"forkserver"``.
-        """
-        normalized_authors = (
-            normalize_signing_key_authors(authors) if authors is not None else None
-        )
-        if (
-            self._mesa._credential.kind is CredentialKind.PRIVATE_KEY
-            and normalized_authors is None
-        ):
-            raise InvalidOptionsError(
-                "Private-key mounts require a nonempty `authors` option."
-            )
-        if self._mesa._credential.kind is not CredentialKind.PRIVATE_KEY and authors is not None:
-            raise InvalidOptionsError("Mount authors require a private-key client.")
-        if not repos:
-            raise InvalidOptionsError(
-                "mesa.fs.mount() requires at least one repo"
-            )
-        org = await self._mesa.resolve_org()
-        repo_configs = [self._normalize_repo(r, org) for r in repos]
-        # Canonical mount profile: repos are encoded as full
-        # ``org/repo`` names, so signing stays offline with no name->id
-        # round-trip. The mesa daemon enforces per-repo read-only itself
-        # (EROFS), so the token always carries write scope.
-        credential = await self._mesa._create_mount_token(
-            scopes=["read", "write"],
-            repos=[f"{org}/{r.name}" for r in repo_configs],
-            authors=normalized_authors,
-            ttl_seconds=ttl,
-        )
-        config = MesaConfig(
-            org=org,
-            api_key=credential,
-            repos=repo_configs,
-            mounted_repos=[r.name for r in repo_configs],
-            api_base_url=self._mesa.api_url,
-            disk_cache=disk_cache,
-        )
-        async with self._connect_and_flush(config) as fs:
-            yield fs
-
-    @asynccontextmanager
     async def _mount_layout(
         self,
         layout: Layout,
@@ -865,23 +878,3 @@ class FsNamespace:
             # no revocation to perform; flush failures surface to the caller.
             if fs is not None:
                 await fs._close()
-
-    @staticmethod
-    def _normalize_repo(repo: str | RepoConfig, org: str) -> RepoConfig:
-        """Parse ``"repo"`` or ``"org/repo"`` into a :class:`RepoConfig`.
-
-        Rejects mismatched ``"org/repo"`` prefixes: cross-org mounts aren't
-        supported and silently dropping the prefix would be surprising.
-        """
-        if isinstance(repo, RepoConfig):
-            return repo
-        if "/" not in repo:
-            return RepoConfig(name=repo)
-        prefix, name = repo.split("/", 1)
-        if prefix != org:
-            raise InvalidOptionsError(
-                f"repo '{repo}' references org '{prefix}', but the client "
-                f"resolved to org '{org}'. Cross-org mounts are not supported; "
-                f"either reconfigure the client or pass '{name}' without a prefix."
-            )
-        return RepoConfig(name=name)

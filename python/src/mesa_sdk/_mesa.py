@@ -291,8 +291,7 @@ class Mesa:
                 )
             if ttl_seconds is not None:
                 raise InvalidOptionsError(
-                    "The lifetime of an existing access token cannot be changed "
-                    "by `fs.mount()`."
+                    "The lifetime of an existing access token cannot be changed."
                 )
             assert isinstance(self._credential.value, str)
             return self._credential.value
@@ -317,8 +316,8 @@ class Mesa:
     def fs(self) -> FsNamespace:
         """Filesystem namespace for mounting repos as a virtual filesystem.
 
-        Use :meth:`mesa.fs.mount() <FsNamespace.mount>` to open a
-        :class:`MesaFileSystem`.
+        Use :meth:`mesa.fs(layout=...).mount() <mesa_sdk.LayoutDefinition.mount>`
+        to open a :class:`MesaFileSystem`.
         """
         if not hasattr(self, "_fs"):
             self._fs = FsNamespace(self)
