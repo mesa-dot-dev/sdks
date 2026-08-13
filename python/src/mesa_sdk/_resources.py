@@ -52,7 +52,6 @@ from mesa_rest.models.create_api_key_body import CreateApiKeyBody
 from mesa_rest.models.create_api_key_body_scopes_item import CreateApiKeyBodyScopesItem
 from mesa_rest.models.create_bookmark_body import CreateBookmarkBody
 from mesa_rest.models.create_change_body import CreateChangeBody
-from mesa_rest.models.create_change_body_author import CreateChangeBodyAuthor
 from mesa_rest.models.create_change_body_committer import CreateChangeBodyCommitter
 from mesa_rest.models.create_change_body_files_item_type_0 import (
     CreateChangeBodyFilesItemType0,
@@ -92,7 +91,6 @@ from mesa_rest.models.merge_bookmark_body_resolutions_item_type_1_hunks_item_tak
 )
 from mesa_rest.models.move_bookmark_body import MoveBookmarkBody
 from mesa_rest.models.update_change_body import UpdateChangeBody
-from mesa_rest.models.update_change_body_author import UpdateChangeBodyAuthor
 from mesa_rest.models.update_change_body_committer import UpdateChangeBodyCommitter
 from mesa_rest.models.update_change_body_files_item_type_0 import (
     UpdateChangeBodyFilesItemType0,
@@ -207,52 +205,37 @@ class RequestAttribution:
 def _prepare_commit_request(
     *,
     attribution: RequestAttribution,
-    author: Author | None,
     authors: list[SigningKeyAuthor] | None,
     preserve_existing_authors: bool = False,
-) -> tuple[Author | None, str | None]:
-    if author is not None and authors is not None:
-        raise InvalidOptionsError("Pass exactly one of `author` or `authors`.")
-
+) -> str | None:
     match attribution.kind:
         case AttributionKind.FIXED_TOKEN:
-            if author is not None or authors is not None:
+            if authors is not None:
                 raise InvalidOptionsError(
                     "Access-token authors are fixed when the token is minted."
                 )
-            return None, None
+            return None
 
         case AttributionKind.PRIVATE_KEY:
             if preserve_existing_authors:
-                if author is not None or authors is not None:
+                if authors is not None:
                     raise InvalidOptionsError(
                         "Conflict-resolution patches preserve the existing "
                         "commit authors."
                     )
-                return None, None
+                return None
 
-            if author is None and authors is None:
+            if authors is None:
                 raise InvalidOptionsError(
-                    "Private-key commit operations require exactly one of "
-                    "`author` or `authors`."
+                    "Private-key commit operations require a nonempty `authors` list."
                 )
-            if author is not None and author.date is not None:
-                raise InvalidOptionsError(
-                    "Private-key request authors do not accept a `date` value."
-                )
-
-            if authors is not None:
-                normalized_authors = normalize_signing_key_authors(authors)
-            else:
-                assert author is not None
-                normalized_authors = normalize_signing_key_authors(
-                    [{"name": author.name, "email": author.email}]
-                )
+            normalized_authors = normalize_signing_key_authors(authors)
             assert attribution.sign is not None
-            return None, attribution.sign(normalized_authors)
+            return attribution.sign(normalized_authors)
 
         case _:
             assert_never(attribution.kind)
+
 
 def _opt(value: object) -> Any:
     return UNSET if value is None else value
@@ -316,10 +299,6 @@ def _to_update_repo_upstream(
     return body
 
 
-def _to_create_author(a: Author) -> CreateChangeBodyAuthor:
-    return CreateChangeBodyAuthor(name=a.name, email=a.email, date=_opt(a.date))
-
-
 def _to_create_committer(c: Author) -> CreateChangeBodyCommitter:
     return CreateChangeBodyCommitter(name=c.name, email=c.email, date=_opt(c.date))
 
@@ -336,10 +315,6 @@ def _to_create_file(
         action=_opt(f.action),
         mode=_opt(f.mode),
     )
-
-
-def _to_update_author(a: Author) -> UpdateChangeBodyAuthor:
-    return UpdateChangeBodyAuthor(name=a.name, email=a.email, date=_opt(a.date))
 
 
 def _to_update_committer(c: Author) -> UpdateChangeBodyCommitter:
@@ -483,20 +458,20 @@ else:
 install_content_model_helpers()
 
 
-class OrgResolver(Protocol):
-    async def __call__(self) -> str: ...
-
-
 class OrgResource:
     """Organization details: ``mesa.org``."""
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
+
+    @property
+    def slug(self) -> str:
+        """Organization slug parsed from the client's credential."""
+        return self._org_slug
 
     async def get(self) -> GetOrgResponse200:
-        resolved = await self._resolve_org()
-        resp = await get_org.asyncio_detailed(resolved, client=self._client)
+        resp = await get_org.asyncio_detailed(self._org_slug, client=self._client)
         return unwrap(resp)
 
 
@@ -585,9 +560,9 @@ class ApiKeys:
     remain supported for existing integrations.
     """
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
 
     async def list(
         self,
@@ -600,9 +575,8 @@ class ApiKeys:
         Deprecated: prefer private keys created in the dashboard. API keys
         remain supported for existing integrations.
         """
-        resolved = await self._resolve_org()
         resp = await list_api_keys.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             cursor=_opt(cursor),
             limit=_opt(limit),
@@ -629,7 +603,6 @@ class ApiKeys:
         :param expires_in_seconds: Server-side TTL. Without this, the
             key never expires until revoked.
         """
-        resolved = await self._resolve_org()
         body = CreateApiKeyBody(
             name=_opt(name),
             scopes=[CreateApiKeyBodyScopesItem(s) for s in scopes]
@@ -639,7 +612,7 @@ class ApiKeys:
             expires_in_seconds=_opt(expires_in_seconds),
         )
         resp = await create_api_key.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             body=body,
         )
@@ -651,9 +624,8 @@ class ApiKeys:
         Deprecated: prefer private keys created in the dashboard. API keys
         remain supported for existing integrations.
         """
-        resolved = await self._resolve_org()
         resp = await revoke_api_key.asyncio_detailed(
-            resolved,
+            self._org_slug,
             key_id,
             client=self._client,
         )
@@ -663,9 +635,9 @@ class ApiKeys:
 class Repos:
     """Repository management: ``mesa.repos``."""
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
 
     async def list(
         self,
@@ -674,9 +646,8 @@ class Repos:
         limit: int | None = None,
         tags: str | Mapping[str, Any] | None = None,
     ) -> ListReposResponse200:
-        resolved = await self._resolve_org()
         resp = await list_repos.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             cursor=_opt(cursor),
             limit=_opt(limit),
@@ -697,7 +668,6 @@ class Repos:
             time. Equivalent to creating the repo and then calling
             :meth:`update` with the same ``upstream`` value.
         """
-        resolved = await self._resolve_org()
         body = CreateRepoBody(
             name=_opt(name),
             default_bookmark=_opt(default_bookmark),
@@ -706,7 +676,7 @@ class Repos:
             else UNSET,
         )
         resp = await create_repo.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             body=body,
         )
@@ -714,9 +684,8 @@ class Repos:
 
     async def get(self, *, repo: str) -> GetRepoResponse200:
         """Raises :exc:`NotFoundError` if ``repo`` doesn't exist."""
-        resolved = await self._resolve_org()
         resp = await get_repo.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
         )
@@ -741,14 +710,13 @@ class Repos:
             just the credential and keep the upstream, pass
             ``UpstreamConfig(url=..., auth=None)``.
         """
-        resolved = await self._resolve_org()
         body = UpdateRepoBody(
             name=_opt(name),
             default_bookmark=_opt(default_bookmark),
             upstream=_to_update_repo_upstream(upstream),
         )
         resp = await update_repo.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             body=body,
@@ -757,9 +725,8 @@ class Repos:
 
     async def delete(self, *, repo: str) -> DeleteRepoResponse200:
         """Delete ``repo`` and its history. Irreversible."""
-        resolved = await self._resolve_org()
         resp = await delete_repo.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
         )
@@ -773,12 +740,11 @@ class Repos:
         ref_globs: dict[str, str] | None = None,
     ) -> SyncUpstreamResponse201:
         """Sync the repository upstream."""
-        resolved = await self._resolve_org()
         body: dict[str, Any] = {"direction": direction}
         if ref_globs is not None:
             body["ref_globs"] = ref_globs
         resp = await sync_upstream.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             body=SyncUpstreamBody.from_dict(body),
@@ -792,9 +758,8 @@ class Repos:
         sync_id: str,
     ) -> GetRepoUpstreamSyncResponse200:
         """Get one sync for the repository upstream."""
-        resolved = await self._resolve_org()
         resp = await get_repo_upstream_sync.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             sync_id,
             client=self._client,
@@ -809,9 +774,8 @@ class Repos:
         limit: int | None = None,
     ) -> ListRepoUpstreamSyncsResponse200:
         """List syncs for the repository upstream, newest first."""
-        resolved = await self._resolve_org()
         resp = await list_repo_upstream_syncs.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             cursor=_opt(cursor),
@@ -823,9 +787,9 @@ class Repos:
 class Content:
     """Repo content browsing: ``mesa.content``."""
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
 
     async def get(
         self,
@@ -843,9 +807,8 @@ class Content:
         :param depth: Directory listing depth. ``1`` returns immediate
             children; higher values recurse.
         """
-        resolved = await self._resolve_org()
         resp = await get_content.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             change_id=_opt(change_id),
@@ -865,11 +828,11 @@ class Bookmarks:
     def __init__(
         self,
         client: AuthenticatedClient,
-        resolve_org: OrgResolver,
+        org_slug: str,
         request_attribution: RequestAttribution,
     ) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
         self._request_attribution = request_attribution
 
     async def list(
@@ -880,9 +843,8 @@ class Bookmarks:
         limit: int | None = None,
         glob: str | None = None,
     ) -> ListBookmarksResponse200:
-        resolved = await self._resolve_org()
         resp = await list_bookmarks.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             cursor=_opt(cursor),
@@ -897,9 +859,8 @@ class Bookmarks:
         repo: str,
         bookmark: str,
     ) -> GetBookmarkResponse200:
-        resolved = await self._resolve_org()
         resp = await get_bookmark.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             bookmark,
             client=self._client,
@@ -913,10 +874,9 @@ class Bookmarks:
         name: str,
         change_id: str,
     ) -> CreateBookmarkResponse201:
-        resolved = await self._resolve_org()
         body = CreateBookmarkBody(name=name, change_id=change_id)
         resp = await create_bookmark.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             body=body,
@@ -929,9 +889,8 @@ class Bookmarks:
         repo: str,
         bookmark: str,
     ) -> DeleteBookmarkResponse200:
-        resolved = await self._resolve_org()
         resp = await delete_bookmark.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             bookmark,
             client=self._client,
@@ -950,13 +909,12 @@ class Bookmarks:
 
         Moves must advance history unless ``allow_backwards`` is true.
         """
-        resolved = await self._resolve_org()
         body = MoveBookmarkBody(
             change_id=change_id,
             allow_backwards=allow_backwards,
         )
         resp = await move_bookmark.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             bookmark,
             client=self._client,
@@ -974,7 +932,6 @@ class Bookmarks:
         allow_conflicted: bool | None = None,
         message: str | None = None,
         resolutions: list[Resolution] | None = None,
-        author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
     ) -> MergeBookmarkResponse200:
         """Merge ``source`` into ``target``.
@@ -991,15 +948,12 @@ class Bookmarks:
         :param resolutions: Conflict resolutions applied before conflict
             detection. Each resolution targets one path — either the full file
             or a set of per-hunk replacements.
-        :param author: Singular commit attribution for a private-key client.
         :param authors: Ordered commit attribution for a private-key client.
         """
-        _, credential = _prepare_commit_request(
+        credential = _prepare_commit_request(
             attribution=self._request_attribution,
-            author=author,
             authors=authors,
         )
-        resolved = await self._resolve_org()
         body = MergeBookmarkBody(
             source=source,
             target=target,
@@ -1013,7 +967,7 @@ class Bookmarks:
             body["message"] = message
         with request_credential(self._request_attribution.auth, credential):
             resp = await merge_bookmark.asyncio_detailed(
-                resolved,
+                self._org_slug,
                 repo,
                 client=self._client,
                 body=body,
@@ -1030,11 +984,11 @@ class Changes:
     def __init__(
         self,
         client: AuthenticatedClient,
-        resolve_org: OrgResolver,
+        org_slug: str,
         request_attribution: RequestAttribution,
     ) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
         self._request_attribution = request_attribution
 
     async def list(
@@ -1046,9 +1000,8 @@ class Changes:
         bookmark: str | None = None,
     ) -> ListChangesResponse200:
         """Pass ``bookmark`` to restrict to changes reachable from that bookmark."""
-        resolved = await self._resolve_org()
         resp = await list_changes.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             cursor=_opt(cursor),
@@ -1063,7 +1016,6 @@ class Changes:
         repo: str,
         base_change_id: str,
         message: str | None = None,
-        author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
         committer: Author | None = None,
         files: list[FileChange] | None = None,
@@ -1072,23 +1024,16 @@ class Changes:
 
         :param files: File operations to apply atomically. Each entry is
             an :class:`~mesa_sdk.FileUpsert` or :class:`~mesa_sdk.FileDelete`.
-        :param author: Singular commit attribution. Private-key clients sign it
-            into a request credential instead of sending it in the body.
         :param authors: Ordered commit attribution for a private-key client.
-        :param committer: When omitted, the server falls back to ``author``.
+        :param committer: Committer identity for the new change.
         """
-        body_author, credential = _prepare_commit_request(
+        credential = _prepare_commit_request(
             attribution=self._request_attribution,
-            author=author,
             authors=authors,
         )
-        resolved = await self._resolve_org()
         body = CreateChangeBody(
             base_change_id=base_change_id,
             message=_opt(message),
-            author=_to_create_author(body_author)
-            if body_author is not None
-            else UNSET,
             committer=_to_create_committer(committer)
             if committer is not None
             else UNSET,
@@ -1096,7 +1041,7 @@ class Changes:
         )
         with request_credential(self._request_attribution.auth, credential):
             resp = await create_change.asyncio_detailed(
-                resolved,
+                self._org_slug,
                 repo,
                 client=self._client,
                 body=body,
@@ -1109,9 +1054,8 @@ class Changes:
         repo: str,
         change_id: str,
     ) -> GetChangeResponse200:
-        resolved = await self._resolve_org()
         resp = await get_change.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             change_id,
             client=self._client,
@@ -1124,7 +1068,6 @@ class Changes:
         repo: str,
         change_id: str,
         message: str | None = None,
-        author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
         committer: Author | None = None,
         files: list[FileChange] | None = None,
@@ -1138,22 +1081,15 @@ class Changes:
             advanced past this commit. Omit to skip the check.
         :param resolutions: Conflict resolutions to apply to a conflicted
             change. Mutually exclusive with ``files``.
-        :param author: Singular commit attribution. Private-key clients sign it
-            into a request credential instead of sending it in the body.
         :param authors: Ordered commit attribution for a private-key client.
         """
-        body_author, credential = _prepare_commit_request(
+        credential = _prepare_commit_request(
             attribution=self._request_attribution,
-            author=author,
             authors=authors,
             preserve_existing_authors=bool(resolutions),
         )
-        resolved = await self._resolve_org()
         body = UpdateChangeBody(
             message=_opt(message),
-            author=_to_update_author(body_author)
-            if body_author is not None
-            else UNSET,
             committer=_to_update_committer(committer)
             if committer is not None
             else UNSET,
@@ -1165,7 +1101,7 @@ class Changes:
         )
         with request_credential(self._request_attribution.auth, credential):
             resp = await update_change.asyncio_detailed(
-                resolved,
+                self._org_slug,
                 repo,
                 change_id,
                 client=self._client,
@@ -1177,9 +1113,9 @@ class Changes:
 class Diffs:
     """Diff inspection: ``mesa.diffs``."""
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
 
     async def get(
         self,
@@ -1189,9 +1125,8 @@ class Diffs:
         head_change_id: str,
         conflicts: DiffConflictFilter | None = None,
     ) -> GetDiffResponse200:
-        resolved = await self._resolve_org()
         resp = await get_diff.asyncio_detailed(
-            resolved,
+            self._org_slug,
             repo,
             client=self._client,
             base_change_id=base_change_id,
@@ -1204,9 +1139,9 @@ class Diffs:
 class WebhookTargets:
     """Webhook delivery targets: ``mesa.webhook_targets``."""
 
-    def __init__(self, client: AuthenticatedClient, resolve_org: OrgResolver) -> None:
+    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
         self._client = client
-        self._resolve_org = resolve_org
+        self._org_slug = org_slug
 
     async def list(
         self,
@@ -1214,9 +1149,8 @@ class WebhookTargets:
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ListWebhookTargetsResponse200:
-        resolved = await self._resolve_org()
         resp = await list_webhook_targets.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             cursor=_opt(cursor),
             limit=_opt(limit),
@@ -1238,7 +1172,6 @@ class WebhookTargets:
         :param repo_ids: Restrict deliveries to these repos. Defaults to
             all repos in the organization.
         """
-        resolved = await self._resolve_org()
         body = CreateWebhookTargetBody(
             url=url,
             name=_opt(name),
@@ -1248,7 +1181,7 @@ class WebhookTargets:
             repo_ids=_opt(repo_ids),
         )
         resp = await create_webhook_target.asyncio_detailed(
-            resolved,
+            self._org_slug,
             client=self._client,
             body=body,
         )
@@ -1264,7 +1197,6 @@ class WebhookTargets:
         repo_ids: list[str] | None = None,
     ) -> UpdateWebhookTargetResponse200:
         """Only fields you pass are modified; omitted fields are left as-is."""
-        resolved = await self._resolve_org()
         body = UpdateWebhookTargetBody(
             url=_opt(url),
             name=_opt(name),
@@ -1274,7 +1206,7 @@ class WebhookTargets:
             repo_ids=_opt(repo_ids),
         )
         resp = await update_webhook_target.asyncio_detailed(
-            resolved,
+            self._org_slug,
             webhook_target_id,
             client=self._client,
             body=body,
@@ -1287,10 +1219,9 @@ class WebhookTargets:
         webhook_target_id: str,
     ) -> UpdateWebhookTargetResponse200:
         """Remove the per-repo filter so the target receives every repo's events."""
-        resolved = await self._resolve_org()
         body = UpdateWebhookTargetBody(repo_ids=None)
         resp = await update_webhook_target.asyncio_detailed(
-            resolved,
+            self._org_slug,
             webhook_target_id,
             client=self._client,
             body=body,
@@ -1302,9 +1233,8 @@ class WebhookTargets:
         *,
         webhook_target_id: str,
     ) -> DeleteWebhookTargetResponse200:
-        resolved = await self._resolve_org()
         resp = await delete_webhook_target.asyncio_detailed(
-            resolved,
+            self._org_slug,
             webhook_target_id,
             client=self._client,
         )

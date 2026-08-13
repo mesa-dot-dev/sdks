@@ -196,6 +196,7 @@ class Mesa:
         if resolved_credential.kind is CredentialKind.PRIVATE_KEY:
             private_key_credential = resolved_credential.value
             assert isinstance(private_key_credential, PrivateKeyCredential)
+            credential_org = private_key_credential.org
             bearer_auth = BearerAuth(
                 lambda: sign_private_key_access_token(
                     private_key=private_key_credential,
@@ -215,6 +216,8 @@ class Mesa:
             )
         else:
             assert isinstance(resolved_credential.value, str)
+            assert resolved_credential.org is not None
+            credential_org = resolved_credential.org
             client_credential = resolved_credential.value
             request_attribution = RequestAttribution(
                 kind=AttributionKind.FIXED_TOKEN
@@ -226,17 +229,17 @@ class Mesa:
             user_agent=user_agent,
         )
 
-        self.repos = Repos(self._client, self.resolve_org)
+        self.repos = Repos(self._client, credential_org)
         self.bookmarks = Bookmarks(
-            self._client, self.resolve_org, request_attribution
+            self._client, credential_org, request_attribution
         )
-        self.changes = Changes(self._client, self.resolve_org, request_attribution)
-        self.content = Content(self._client, self.resolve_org)
-        self.diffs = Diffs(self._client, self.resolve_org)
+        self.changes = Changes(self._client, credential_org, request_attribution)
+        self.content = Content(self._client, credential_org)
+        self.diffs = Diffs(self._client, credential_org)
         self.tokens = Tokens(self._sign_token)
-        self.api_keys = ApiKeys(self._client, self.resolve_org)
-        self.org = OrgResource(self._client, self.resolve_org)
-        self.webhook_targets = WebhookTargets(self._client, self.resolve_org)
+        self.api_keys = ApiKeys(self._client, credential_org)
+        self.org = OrgResource(self._client, credential_org)
+        self.webhook_targets = WebhookTargets(self._client, credential_org)
         self.webhooks = Webhooks(webhook_secret)
 
     async def _sign_token(
@@ -322,16 +325,6 @@ class Mesa:
         if not hasattr(self, "_fs"):
             self._fs = FsNamespace(self)
         return self._fs
-
-    async def resolve_org(self) -> str:
-        """Return the organization encoded in the client's credential."""
-        if self._credential.kind is CredentialKind.PRIVATE_KEY:
-            assert isinstance(self._credential.value, PrivateKeyCredential)
-            return self._credential.value.org
-        if self._credential.kind is CredentialKind.ACCESS_TOKEN:
-            assert self._credential.org is not None
-            return self._credential.org
-        raise AssertionError("unreachable credential kind")
 
     async def whoami(self) -> WhoamiResponse200:
         """Return the identity tied to the credential. Cached after first call."""

@@ -173,7 +173,7 @@ type FixedTokenBookmarks = Omit<ApiResources['bookmarks'], 'merge'> & {
 };
 
 type DynamicBookmarks = Omit<ApiResources['bookmarks'], 'merge'> & {
-  merge: ApiResources['bookmarks']['merge'] & PrivateKeyBookmarks['merge'];
+  merge: PrivateKeyBookmarks['merge'] & FixedTokenBookmarks['merge'];
 };
 
 type MesaBookmarks<TOptions extends MesaOptions> = CredentialSpecific<
@@ -194,8 +194,8 @@ type FixedTokenChanges = Omit<ApiResources['changes'], 'create' | 'patch'> & {
 };
 
 type DynamicChanges = Omit<ApiResources['changes'], 'create' | 'patch'> & {
-  create: ApiResources['changes']['create'] & PrivateKeyChanges['create'];
-  patch: ApiResources['changes']['patch'] & PrivateKeyChanges['patch'];
+  create: PrivateKeyChanges['create'] & FixedTokenChanges['create'];
+  patch: PrivateKeyChanges['patch'] & FixedTokenChanges['patch'];
 };
 
 type MesaChanges<TOptions extends MesaOptions> = CredentialSpecific<
@@ -328,9 +328,10 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       userAgent: options.userAgent,
     });
 
+    const orgSlug = resolvedCredential.kind === 'privateKey' ? resolvedCredential.value.org : resolvedCredential.org;
     const resources = createApiResources({
       restClient: this.restClient,
-      resolveOrg: () => this.resolveOrg(),
+      orgSlug,
       webhookSecret: options.webhookSecret,
       signToken: (input) => this.signToken(input),
       requestAttribution:
@@ -360,7 +361,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       ttl: number | undefined,
       authors: PrivateKeyAuthors | undefined
     ): Promise<TokensCreateResponse> => {
-      const { scopes, repos } = await this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
+      const { scopes, repos } = this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
       const tokenInput = { scopes, repos, ttl_seconds: ttl };
       return resources.tokens.create({ ...tokenInput, authors: authors! });
     };
@@ -384,7 +385,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
           'mount() does not accept `authors`. Set them on the definition: mesa.fs({ layout, authors })'
         );
       }
-      const { layout, org, scopes, repos } = await this.deriveLayoutTokenRequest(
+      const { layout, org, scopes, repos } = this.deriveLayoutTokenRequest(
         definitionLayout,
         'mesa.fs({ layout }).mount()'
       );
@@ -456,13 +457,13 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
    * Shared by the definition's `mount()` and `token()` so the derivation
    * exists exactly once.
    */
-  private async deriveLayoutTokenRequest(
+  private deriveLayoutTokenRequest(
     layout: Layout,
     caller: string
-  ): Promise<{ layout: Layout; org: string; scopes: string[]; repos: string[] }> {
+  ): { layout: Layout; org: string; scopes: string[]; repos: string[] } {
     // The layout carries no organization of its own; the client's
     // organization scopes the token.
-    const org = await this.resolveOrg();
+    const org = this.org.slug;
     const declarations: Repo[] = [];
     const visit = (entries: Record<string, Repo | Repo[]>): void => {
       for (const entry of Object.values(entries)) {
@@ -486,13 +487,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     const repos = [...new Set(declarations.map((declaration) => `${org}/${declaration.name}`))];
     const scopes = declarations.some((declaration) => declaration.mode === 'rw') ? [...DEFAULT_TOKEN_SCOPES] : ['read'];
     return { layout, org, scopes, repos };
-  }
-
-  async resolveOrg(): Promise<string> {
-    if (this.credential.kind === 'privateKey') {
-      return this.credential.value.org;
-    }
-    return this.credential.org;
   }
 
   async whoami(): Promise<WhoamiResponse> {

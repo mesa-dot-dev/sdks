@@ -8,28 +8,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.46.0] - 2026-08-13
 
 ### Changed
 
-- **Breaking:** Remove `mesa.fs.mount(repos=...)`. Use a layout definition instead: `mesa.fs(layout=..., authors=..., ttl=...).mount(disk_cache=...)`
-- **Breaking:** Change `repo()` to pin a revision with a nested `at={"bookmark": ...}` or `at={"change_id": ...}` instead of top-level `bookmark` / `change_id`
+- **Breaking:** Replace the `mesa.fs.mount(repos=...)` mount syntax with the new FS definition syntax: `mesa.fs(layout=...).mount(...)`
+- **Breaking:** Change `repo()` to select a checkout revision with the `at` field instead of `bookmark` / `change_id`
 
 ### Added
 
-- Add `branched_from` to `repo()` to fork a new change the first time the mount opens the repo. Use `as={"bookmark": ..., "describe": ...}` to name and describe the fork, or omit it to fork an anonymous tip
+- Add `branched_from` to `repo()` to fork a new change the first time the mount opens the repo
 
 ### Removed
 
+- **Breaking:** Removed the async `mesa.resolve_org()` method. The organization slug is now available synchronously via `mesa.org.slug`.
 - **Breaking:** Remove `org` from the Python SDK constructor and resource methods; the SDK derives the organization from the credential
-- **Breaking:** Remove `vcs_url` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
+- **Breaking:** Remove `vcs_url` option from the client configuration
+- **Breaking:** Replace all singular `author` options with a plural `authors`
 
 ### Fixed
 
-- Fix Python type checking allowing layout `repo()` declarations to set both `at` and `branched_from`
 - Fix `repo()` `at` pins being overridden when the organization's configuration forks the repo on open
-- Fix layout `repo()` silently dropping unrecognized keys in `at`, `branched_from`, and `branched_from["as"]`; a misspelled key such as `changeId` now raises instead of pinning the wrong revision
-- Fix layout `repo()` accepting an `"org/repo"` selector; a name containing `/` now raises with the organization prefix removed, instead of failing at mount time as an unresolvable repository
+- Fix layout `repo()` silently dropping unrecognized keys in `at`, `branched_from`. The SDK now raises instead of pinning the wrong revision
+- Fix layout `repo()` silently accepting an invalid fully-qualified `"org/repo"` name; a repo name containing `/` now raises
 
 ## [0.45.0] - 2026-08-11
 

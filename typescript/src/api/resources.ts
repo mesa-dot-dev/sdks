@@ -103,8 +103,6 @@ function sign(secret: string, timestamp: number, rawBody: string): string {
   return createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
 }
 
-type ResolveOrg = () => Promise<string>;
-
 type NormalizedSigningKeyAuthors = ReturnType<typeof normalizeSigningKeyAuthors>;
 
 type RequestAttribution =
@@ -113,7 +111,7 @@ type RequestAttribution =
 
 type OrgRequestContext = {
   restClient: RestClient;
-  resolveOrg: ResolveOrg;
+  orgSlug: string;
   webhookSecret?: string;
   /** Sign an access token locally with the configured private key. */
   signToken: (input: TokensCreateInput) => Promise<TokensCreateResponse>;
@@ -175,26 +173,18 @@ type BookmarksGetInput = Omit<GetBookmarkData['path'], 'org'>;
 type BookmarksCreateInput = Omit<CreateBookmarkData['path'], 'org'> & CreateBookmarkData['body'];
 type BookmarksDeleteInput = Omit<DeleteBookmarkData['path'], 'org'>;
 type BookmarksMoveInput = Omit<MoveBookmarkData['path'], 'org'> & MoveBookmarkData['body'];
-export type BookmarksMergeInput = Omit<MergeBookmarkData['path'], 'org'> & MergeBookmarkData['body'];
+export type BookmarksMergeInput = Omit<MergeBookmarkData['path'], 'org'> & Omit<MergeBookmarkData['body'], 'author'>;
 
-type SigningKeyCommitAttribution =
-  | {
-      /** @deprecated Use `authors` for ordered commit attribution. */
-      author: SigningKeyAuthorInput;
-      authors?: never;
-    }
-  | {
-      author?: never;
-      /** Ordered, nonempty commit attribution signed into this request's token. */
-      authors: NonEmptyReadonlyArray<SigningKeyAuthorInput>;
-    };
+type PrivateKeyCommitAuthors = {
+  /** Ordered, nonempty commit attribution signed into this request's token. */
+  authors: NonEmptyReadonlyArray<SigningKeyAuthorInput>;
+};
 
 type NoCommitAttribution = {
-  author?: never;
   authors?: never;
 };
 
-export type PrivateKeyBookmarksMergeInput = BookmarksMergeInput & SigningKeyCommitAttribution;
+export type PrivateKeyBookmarksMergeInput = BookmarksMergeInput & PrivateKeyCommitAuthors;
 export type FixedTokenBookmarksMergeInput = BookmarksMergeInput & NoCommitAttribution;
 
 type ChangesListInput = Omit<ListChangesData['path'], 'org'> & NonNullable<ListChangesData['query']>;
@@ -235,16 +225,15 @@ export type ChangesPatchInput = Omit<UpdateChangeData['path'], 'org'> & UpdateCh
 
 type DistributiveOmit<T, TKey extends PropertyKey> = T extends unknown ? Omit<T, TKey> : never;
 
-export type PrivateKeyChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & SigningKeyCommitAttribution;
+export type PrivateKeyChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & PrivateKeyCommitAuthors;
 export type FixedTokenChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & NoCommitAttribution;
 
 type ChangesPatchWithoutAttribution = Omit<ChangesPatchInput, 'author' | 'resolutions'>;
 
 export type PrivateKeyChangesPatchInput =
-  | (ChangesPatchWithoutAttribution & { resolutions?: never } & SigningKeyCommitAttribution)
+  | (ChangesPatchWithoutAttribution & { resolutions?: never } & PrivateKeyCommitAuthors)
   | (ChangesPatchWithoutAttribution & {
       resolutions: NonEmptyReadonlyArray<NonNullable<ChangesPatchInput['resolutions']>[number]>;
-      author?: never;
       authors?: never;
     });
 export type FixedTokenChangesPatchInput = Omit<ChangesPatchInput, 'author'> & NoCommitAttribution;
@@ -270,10 +259,6 @@ function prepareCommitRequest(
   const hasAuthor = author !== undefined;
   const hasAuthors = authors !== undefined;
 
-  if (hasAuthor && hasAuthors) {
-    throw new InvalidOptionsError('Pass exactly one of `author` or `authors`.');
-  }
-
   if (requestAttribution.kind === 'fixed-token') {
     if (hasAuthor || hasAuthors) {
       throw new InvalidOptionsError('Access-token authors are fixed when the token is minted.');
@@ -289,19 +274,21 @@ function prepareCommitRequest(
     return { body };
   }
 
-  if (!hasAuthor && !hasAuthors) {
-    throw new InvalidOptionsError('Private-key commit operations require exactly one of `author` or `authors`.');
+  if (hasAuthor) {
+    throw new InvalidOptionsError('The singular `author` option is not supported. Pass `authors` instead.');
   }
 
-  const normalizedAuthors = hasAuthors
-    ? normalizeSigningKeyAuthors(authors as readonly SigningKeyAuthorInput[])
-    : normalizeSigningKeyAuthors([author as SigningKeyAuthorInput]);
+  if (!hasAuthors) {
+    throw new InvalidOptionsError('Private-key commit operations require a nonempty `authors` option.');
+  }
+
+  const normalizedAuthors = normalizeSigningKeyAuthors(authors as readonly SigningKeyAuthorInput[]);
   return { body, credential: requestAttribution.sign(normalizedAuthors) };
 }
 
 export function createApiResources({
   restClient,
-  resolveOrg,
+  orgSlug: org,
   webhookSecret,
   signToken,
   requestAttribution,
@@ -324,12 +311,12 @@ export function createApiResources({
   };
 
   return {
-    org: {
+    org: Object.freeze({
+      slug: org,
       get: async (): Promise<GetOrgResponse> => {
-        const org = await resolveOrg();
         return restClient.request(getOrg, { path: { org } });
       },
-    },
+    } as const),
     tokens: {
       /** Sign locally with a private key. Static access-token clients cannot mint another token. */
       create: (input: TokensCreateInput) => signToken(input),
@@ -342,18 +329,15 @@ export function createApiResources({
     apiKeys: {
       /** @deprecated Prefer private keys created in the dashboard. */
       list: async (): Promise<ListApiKeysResponse> => {
-        const org = await resolveOrg();
         return restClient.request(listApiKeys, { path: { org } });
       },
       /** @deprecated Prefer private keys created in the dashboard. */
       create: async (input: ApiKeysCreateInput): Promise<CreateApiKeyResponse> => {
-        const org = await resolveOrg();
         return restClient.request(createApiKey, { path: { org }, body: input });
       },
       /** @deprecated Prefer private keys created in the dashboard. */
       revoke: async (input: ApiKeysRevokeInput): Promise<RevokeApiKeyResponse> => {
         const { id } = input;
-        const org = await resolveOrg();
         return restClient.request(revokeApiKey, { path: { id, org } });
       },
     },
@@ -361,81 +345,66 @@ export function createApiResources({
       list: async (input: ReposListInput = {}): Promise<ListReposResponse> => {
         const { tags, ...queryInput } = input;
         const query = tags === undefined ? queryInput : { ...queryInput, tags: serializeRepoTagsFilter(tags) };
-        const org = await resolveOrg();
         return restClient.request(listRepos, { path: { org }, query });
       },
       create: async (input: ReposCreateInput): Promise<CreateRepoResponse> => {
-        const org = await resolveOrg();
         return restClient.request(createRepo, { path: { org }, body: input });
       },
       get: async (input: ReposGetInput): Promise<GetRepoResponse> => {
         const { repo } = input;
-        const org = await resolveOrg();
         return restClient.request(getRepo, { path: { org, repo } });
       },
       update: async (input: ReposUpdateInput): Promise<UpdateRepoResponse> => {
         const { repo, ...body } = input;
-        const org = await resolveOrg();
         return restClient.request(updateRepo, { path: { org, repo }, body });
       },
       delete: async (input: ReposDeleteInput): Promise<DeleteRepoResponse> => {
         const { repo } = input;
-        const org = await resolveOrg();
         return restClient.request(deleteRepo, { path: { org, repo } });
       },
       syncUpstream: async (input: ReposSyncUpstreamInput): Promise<SyncUpstreamResponse> => {
         const { repo, ...body } = input;
-        const org = await resolveOrg();
         return restClient.request(syncUpstream, { path: { org, repo }, body });
       },
       getUpstreamSync: async (input: ReposGetUpstreamSyncInput): Promise<GetRepoUpstreamSyncResponse> => {
         const { repo, syncId } = input;
-        const org = await resolveOrg();
         return restClient.request(getRepoUpstreamSync, { path: { org, repo, syncId } });
       },
       listUpstreamSyncs: async (input: ReposListUpstreamSyncsInput): Promise<ListRepoUpstreamSyncsResponse> => {
         const { repo, ...query } = input;
-        const org = await resolveOrg();
         return restClient.request(listRepoUpstreamSyncs, { path: { org, repo }, query });
       },
     },
     content: {
       get: async (input: ContentGetInput): Promise<GetContentResponse> => {
         const { repo, ...query } = input;
-        const org = await resolveOrg();
         return restClient.request(getContent, { path: { org, repo }, query });
       },
     },
     bookmarks: {
       list: async (input: BookmarksListInput): Promise<ListBookmarksResponse> => {
         const { repo, ...query } = input;
-        const org = await resolveOrg();
         return restClient.request(listBookmarks, { path: { org, repo }, query });
       },
       get: async (input: BookmarksGetInput): Promise<GetBookmarkResponse> => {
         const { repo, bookmark } = input;
-        const org = await resolveOrg();
         return restClient.request(getBookmark, { path: { org, repo, bookmark } });
       },
       create: async (input: BookmarksCreateInput): Promise<CreateBookmarkResponse> => {
         const { repo, ...body } = input;
-        const org = await resolveOrg();
         return restClient.request(createBookmark, { path: { org, repo }, body });
       },
       delete: async (input: BookmarksDeleteInput): Promise<DeleteBookmarkResponse> => {
         const { repo, bookmark } = input;
-        const org = await resolveOrg();
         return restClient.request(deleteBookmark, { path: { org, repo, bookmark } });
       },
       move: async (input: BookmarksMoveInput): Promise<MoveBookmarkResponse> => {
         const { repo, bookmark, ...body } = input;
-        const org = await resolveOrg();
         return restClient.request(moveBookmark, { path: { org, repo, bookmark }, body });
       },
       merge: async (input: BookmarksMergeInput): Promise<MergeBookmarkResponse> => {
         const { repo, ...body } = input;
         const prepared = prepareCommitRequest(body, requestAttribution);
-        const org = await resolveOrg();
         return restClient.request(
           mergeBookmark,
           {
@@ -449,13 +418,11 @@ export function createApiResources({
     changes: {
       list: async (input: ChangesListInput): Promise<ListChangesResponse> => {
         const { repo, ...query } = input;
-        const org = await resolveOrg();
         return restClient.request(listChanges, { path: { org, repo }, query });
       },
       create: async (input: ChangesCreateInput): Promise<CreateChangeResponse> => {
         const { repo, ...body } = input;
         const prepared = prepareCommitRequest(body, requestAttribution);
-        const org = await resolveOrg();
         return restClient.request(
           createChange,
           { path: { org, repo }, body: prepared.body as CreateChangeData['body'] },
@@ -464,14 +431,12 @@ export function createApiResources({
       },
       get: async (input: ChangesGetInput): Promise<GetChangeResponse> => {
         const { repo, change_id: changeId } = input;
-        const org = await resolveOrg();
         return restClient.request(getChange, { path: { org, repo, change_id: changeId } });
       },
       patch: async (input: ChangesPatchInput): Promise<UpdateChangeResponse> => {
         const { repo, change_id: changeId, ...body } = input;
         const preserveExistingAuthors = Array.isArray(body.resolutions) && body.resolutions.length > 0;
         const prepared = prepareCommitRequest(body, requestAttribution, preserveExistingAuthors);
-        const org = await resolveOrg();
         return restClient.request(
           updateChange,
           {
@@ -485,28 +450,23 @@ export function createApiResources({
     diffs: {
       get: async (input: DiffsGetInput): Promise<GetDiffResponse> => {
         const { repo, ...query } = input;
-        const org = await resolveOrg();
         return restClient.request(getDiff, { path: { org, repo }, query });
       },
     },
     webhookTargets: {
       list: async (input: WebhookTargetsListInput = {}): Promise<ListWebhookTargetsResponse> => {
-        const org = await resolveOrg();
         const query = input;
         return restClient.request(listWebhookTargets, { path: { org }, query });
       },
       create: async (input: WebhookTargetsCreateInput): Promise<CreateWebhookTargetResponse> => {
-        const org = await resolveOrg();
         return restClient.request(createWebhookTarget, { path: { org }, body: input });
       },
       update: async (input: WebhookTargetsUpdateInput): Promise<UpdateWebhookTargetResponse> => {
         const { webhookTargetId, ...body } = input;
-        const org = await resolveOrg();
         return restClient.request(updateWebhookTarget, { path: { org, webhookTargetId }, body });
       },
       delete: async (input: WebhookTargetsDeleteInput): Promise<DeleteWebhookTargetResponse> => {
         const { webhookTargetId } = input;
-        const org = await resolveOrg();
         return restClient.request(deleteWebhookTarget, { path: { org, webhookTargetId } });
       },
     },

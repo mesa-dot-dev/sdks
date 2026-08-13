@@ -825,7 +825,7 @@ class FsNamespace:
         """
         # The layout carries no organization of its own; the client's
         # organization scopes the token.
-        org = await self._mesa.resolve_org()
+        org = self._mesa.org.slug
         declarations: list[Repo] = []
 
         def visit(entries: Mapping[str, Repo | Sequence[Repo]]) -> None:

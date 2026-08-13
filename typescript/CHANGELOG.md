@@ -8,22 +8,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.46.0] - 2026-08-13
 
 ### Changed
 
-- **Breaking:** Remove `mesa.fs.mount({ repos })`. Use a layout definition instead: `mesa.fs({ layout, authors, ttl }).mount({ cache, telemetry })`
+- **Breaking:** Replace the `mesa.fs.mount({ repos })` mount syntax with the new `mesa.fs({ layout, ... }).mount(...)` syntax
 - **Breaking:** Remove `FsMountReposOptions`. `mount()` now only accepts `cache` and `telemetry`; pass `ttl` and `authors` to `mesa.fs()` instead
-- **Breaking:** Change `repo()` to pin a revision with a nested `at: { bookmark }` or `at: { changeId }` instead of top-level `bookmark` / `changeId`
+- **Breaking:** Change `repo()` to select a checkout revision with the `at` field instead of `bookmark` / `changeId`
 
 ### Added
 
-- Add `branchedFrom` to `repo()` to fork a new change the first time the mount opens the repo. Use `as: { bookmark, describe }` to name and describe the fork, or omit it to fork an anonymous tip
+- Add `branchedFrom` to `repo()` to fork a new change the first time the mount opens the repo
 
 ### Removed
 
+- **Breaking:** Removed the async `mesa.resolveOrg()` method. The organization slug is now available synchronously via `mesa.org.slug`.
 - **Breaking:** Remove `org` from the TypeScript SDK constructor and resource methods; the SDK derives the organization from the credential
-- **Breaking:** Remove `vcsUrl` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
+- **Breaking:** Remove `vcsUrl` option from the client configuration
+- **Breaking:** Replace all singular `author` options with a plural `authors`
 
 ### Fixed
 
