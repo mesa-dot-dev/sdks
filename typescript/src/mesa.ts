@@ -216,8 +216,6 @@ export interface MesaOptions {
   /** Grouped private-key or signing-key access-token authentication. */
   auth?: MesaAuth;
   apiUrl?: string;
-  /** The organization is derived from the credential. If supplied, this value must match it. */
-  org?: string;
   fetch?: typeof globalThis.fetch;
   userAgent?: string;
   webhookSecret?: string;
@@ -341,17 +339,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     if (options.userAgent && looksLikePrivateKey(options.userAgent)) {
       throw new InvalidOptionsError('User-agent metadata must not contain Mesa private key material.');
     }
-    const providedOrg = options.org?.trim();
-    if (providedOrg && looksLikePrivateKey(providedOrg)) {
-      throw new InvalidOptionsError('Organization options must not contain Mesa private key material.');
-    }
-    if (resolvedCredential.kind === 'privateKey' && providedOrg && providedOrg !== resolvedCredential.value.org) {
-      throw new InvalidOptionsError('The `org` option must match the organization encoded in the private key.');
-    }
-    if (resolvedCredential.kind === 'accessToken' && providedOrg && providedOrg !== resolvedCredential.org) {
-      throw new InvalidOptionsError('The `org` option must match the organization encoded in the access token.');
-    }
-
     this.restClient = createRestClient({
       credential:
         resolvedCredential.kind === 'privateKey'
@@ -364,7 +351,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
 
     const resources = createApiResources({
       restClient: this.restClient,
-      resolveOrg: (org) => this.resolveOrg(org),
+      resolveOrg: () => this.resolveOrg(),
       webhookSecret: options.webhookSecret,
       signToken: (input) => this.signToken(input),
       requestAttribution:
@@ -399,8 +386,8 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       // resolve only at mount time — a layout naming a nonexistent
       // repository still mints a token and fails at mount.
       MesaFileSystem.validateLayout(layout.toString());
-      const { org, scopes, repos } = await this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
-      const tokenInput = { org, scopes, repos, ttl_seconds: ttl };
+      const { scopes, repos } = await this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
+      const tokenInput = { scopes, repos, ttl_seconds: ttl };
       return resources.tokens.create({ ...tokenInput, authors: authors! });
     };
 
@@ -421,7 +408,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       // Mint a single access token for the mount's whole lifetime. There is
       // no refresh and no credential hot-swap, so when the token expires the
       // mount expires with it.
-      const tokenInput = { org, scopes, repos, ttl_seconds: ttl };
+      const tokenInput = { scopes, repos, ttl_seconds: ttl };
       const token = signPrivateKeyAccessToken({
         credential: this.credential.value,
         authors: authors!,
@@ -491,7 +478,6 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
           return this.createFs(org, fsOptions, this.credential.value);
         }
         const tokenInput = {
-          org,
           scopes: DEFAULT_TOKEN_SCOPES,
           repos: canonicalRepos.map((r) => `${org}/${r.name}`),
           ttl_seconds: fsOptions.ttl,
@@ -564,19 +550,9 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     return { layout, org, scopes, repos };
   }
 
-  async resolveOrg(org?: string): Promise<string> {
-    const requestedOrg = org?.trim();
-    if (requestedOrg && looksLikePrivateKey(requestedOrg)) {
-      throw new InvalidOptionsError('Organization options must not contain Mesa private key material.');
-    }
+  async resolveOrg(): Promise<string> {
     if (this.credential.kind === 'privateKey') {
-      if (requestedOrg && requestedOrg !== this.credential.value.org) {
-        throw new InvalidOptionsError('Private-key clients are bound to the organization encoded in the key.');
-      }
       return this.credential.value.org;
-    }
-    if (requestedOrg && requestedOrg !== this.credential.org) {
-      throw new InvalidOptionsError('Access-token clients are bound to the organization encoded in the token.');
     }
     return this.credential.org;
   }

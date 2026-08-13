@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Breaking:** Remove `org` from the TypeScript SDK constructor and resource methods; the SDK derives the organization from the credential
 - **Breaking:** Remove `vcsUrl` from the SDK and MesaFS configuration; VCS traffic now always uses the configured API origin
 
 ## [0.45.0] - 2026-08-11

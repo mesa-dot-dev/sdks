@@ -484,7 +484,7 @@ install_content_model_helpers()
 
 
 class OrgResolver(Protocol):
-    async def __call__(self, org: str | None = None) -> str: ...
+    async def __call__(self) -> str: ...
 
 
 class OrgResource:
@@ -494,8 +494,8 @@ class OrgResource:
         self._client = client
         self._resolve_org = resolve_org
 
-    async def get(self, *, org: str | None = None) -> GetOrgResponse200:
-        resolved = await self._resolve_org(org)
+    async def get(self) -> GetOrgResponse200:
+        resolved = await self._resolve_org()
         resp = await get_org.asyncio_detailed(resolved, client=self._client)
         return unwrap(resp)
 
@@ -545,7 +545,6 @@ class Tokens:
     async def create(
         self,
         *,
-        org: str | None = None,
         scopes: list[str] | None = None,
         repos: list[str] | None = None,
         repo_ids: list[str] | None = None,
@@ -556,8 +555,7 @@ class Tokens:
         scopes and repository restrictions.
 
         Private-key clients must pass a non-empty ordered ``authors`` list.
-        Static access-token clients cannot mint another token. ``org`` remains
-        accepted and ignored for source compatibility with prior versions.
+        Static access-token clients cannot mint another token.
 
         :param scopes: Token scopes (``"read"``, ``"write"``, ``"admin"``).
             Defaults to ``["read", "write"]``.
@@ -568,12 +566,9 @@ class Tokens:
         :param authors: Ordered commit attribution for a private-key token.
         :param ttl_seconds: Token lifetime in seconds. Defaults to 900 and
             allows up to 14400.
-        :param org: Deprecated and ignored. The signing credential supplies the
-            token's organization.
 
         :raises InvalidOptionsError: If ``ttl_seconds`` is out of range.
         """
-        del org  # Deprecated: the signing credential supplies the token's org.
         return await self._sign_token(
             scopes=scopes,
             repos=repos,
@@ -597,7 +592,6 @@ class ApiKeys:
     async def list(
         self,
         *,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ListApiKeysResponse200:
@@ -606,7 +600,7 @@ class ApiKeys:
         Deprecated: prefer private keys created in the dashboard. API keys
         remain supported for existing integrations.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_api_keys.asyncio_detailed(
             resolved,
             client=self._client,
@@ -618,7 +612,6 @@ class ApiKeys:
     async def create(
         self,
         *,
-        org: str | None = None,
         name: str | None = None,
         scopes: list[str] | None = None,
         repo_ids: list[str] | None = None,
@@ -636,7 +629,7 @@ class ApiKeys:
         :param expires_in_seconds: Server-side TTL. Without this, the
             key never expires until revoked.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = CreateApiKeyBody(
             name=_opt(name),
             scopes=[CreateApiKeyBodyScopesItem(s) for s in scopes]
@@ -652,15 +645,13 @@ class ApiKeys:
         )
         return unwrap(resp)
 
-    async def revoke(
-        self, *, key_id: str, org: str | None = None
-    ) -> RevokeApiKeyResponse200:
+    async def revoke(self, *, key_id: str) -> RevokeApiKeyResponse200:
         """Revoke ``key_id``. Subsequent requests using the key fail with 401.
 
         Deprecated: prefer private keys created in the dashboard. API keys
         remain supported for existing integrations.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await revoke_api_key.asyncio_detailed(
             resolved,
             key_id,
@@ -679,12 +670,11 @@ class Repos:
     async def list(
         self,
         *,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
         tags: str | Mapping[str, Any] | None = None,
     ) -> ListReposResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_repos.asyncio_detailed(
             resolved,
             client=self._client,
@@ -697,7 +687,6 @@ class Repos:
     async def create(
         self,
         *,
-        org: str | None = None,
         name: str | None = None,
         default_bookmark: str | None = None,
         upstream: UpstreamConfig | None = None,
@@ -708,7 +697,7 @@ class Repos:
             time. Equivalent to creating the repo and then calling
             :meth:`update` with the same ``upstream`` value.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = CreateRepoBody(
             name=_opt(name),
             default_bookmark=_opt(default_bookmark),
@@ -723,9 +712,9 @@ class Repos:
         )
         return unwrap(resp)
 
-    async def get(self, *, repo: str, org: str | None = None) -> GetRepoResponse200:
+    async def get(self, *, repo: str) -> GetRepoResponse200:
         """Raises :exc:`NotFoundError` if ``repo`` doesn't exist."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_repo.asyncio_detailed(
             resolved,
             repo,
@@ -737,7 +726,6 @@ class Repos:
         self,
         *,
         repo: str,
-        org: str | None = None,
         name: str | None = None,
         default_bookmark: str | None = None,
         upstream: UpstreamConfig | None | Unset = UNSET,
@@ -753,7 +741,7 @@ class Repos:
             just the credential and keep the upstream, pass
             ``UpstreamConfig(url=..., auth=None)``.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = UpdateRepoBody(
             name=_opt(name),
             default_bookmark=_opt(default_bookmark),
@@ -767,11 +755,9 @@ class Repos:
         )
         return unwrap(resp)
 
-    async def delete(
-        self, *, repo: str, org: str | None = None
-    ) -> DeleteRepoResponse200:
+    async def delete(self, *, repo: str) -> DeleteRepoResponse200:
         """Delete ``repo`` and its history. Irreversible."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await delete_repo.asyncio_detailed(
             resolved,
             repo,
@@ -785,10 +771,9 @@ class Repos:
         repo: str,
         direction: str,
         ref_globs: dict[str, str] | None = None,
-        org: str | None = None,
     ) -> SyncUpstreamResponse201:
         """Sync the repository upstream."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body: dict[str, Any] = {"direction": direction}
         if ref_globs is not None:
             body["ref_globs"] = ref_globs
@@ -805,10 +790,9 @@ class Repos:
         *,
         repo: str,
         sync_id: str,
-        org: str | None = None,
     ) -> GetRepoUpstreamSyncResponse200:
         """Get one sync for the repository upstream."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_repo_upstream_sync.asyncio_detailed(
             resolved,
             repo,
@@ -821,12 +805,11 @@ class Repos:
         self,
         *,
         repo: str,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ListRepoUpstreamSyncsResponse200:
         """List syncs for the repository upstream, newest first."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_repo_upstream_syncs.asyncio_detailed(
             resolved,
             repo,
@@ -848,7 +831,6 @@ class Content:
         self,
         *,
         repo: str,
-        org: str | None = None,
         change_id: str | None = None,
         path: str | None = None,
         depth: int | None = None,
@@ -861,7 +843,7 @@ class Content:
         :param depth: Directory listing depth. ``1`` returns immediate
             children; higher values recurse.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_content.asyncio_detailed(
             resolved,
             repo,
@@ -894,12 +876,11 @@ class Bookmarks:
         self,
         *,
         repo: str,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
         glob: str | None = None,
     ) -> ListBookmarksResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_bookmarks.asyncio_detailed(
             resolved,
             repo,
@@ -915,9 +896,8 @@ class Bookmarks:
         *,
         repo: str,
         bookmark: str,
-        org: str | None = None,
     ) -> GetBookmarkResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_bookmark.asyncio_detailed(
             resolved,
             repo,
@@ -932,9 +912,8 @@ class Bookmarks:
         repo: str,
         name: str,
         change_id: str,
-        org: str | None = None,
     ) -> CreateBookmarkResponse201:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = CreateBookmarkBody(name=name, change_id=change_id)
         resp = await create_bookmark.asyncio_detailed(
             resolved,
@@ -949,9 +928,8 @@ class Bookmarks:
         *,
         repo: str,
         bookmark: str,
-        org: str | None = None,
     ) -> DeleteBookmarkResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await delete_bookmark.asyncio_detailed(
             resolved,
             repo,
@@ -967,13 +945,12 @@ class Bookmarks:
         bookmark: str,
         change_id: str,
         allow_backwards: bool = False,
-        org: str | None = None,
     ) -> MoveBookmarkResponse200:
         """Repoint ``bookmark`` to ``change_id``.
 
         Moves must advance history unless ``allow_backwards`` is true.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = MoveBookmarkBody(
             change_id=change_id,
             allow_backwards=allow_backwards,
@@ -999,7 +976,6 @@ class Bookmarks:
         resolutions: list[Resolution] | None = None,
         author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
-        org: str | None = None,
     ) -> MergeBookmarkResponse200:
         """Merge ``source`` into ``target``.
 
@@ -1023,7 +999,7 @@ class Bookmarks:
             author=author,
             authors=authors,
         )
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = MergeBookmarkBody(
             source=source,
             target=target,
@@ -1065,13 +1041,12 @@ class Changes:
         self,
         *,
         repo: str,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
         bookmark: str | None = None,
     ) -> ListChangesResponse200:
         """Pass ``bookmark`` to restrict to changes reachable from that bookmark."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_changes.asyncio_detailed(
             resolved,
             repo,
@@ -1087,7 +1062,6 @@ class Changes:
         *,
         repo: str,
         base_change_id: str,
-        org: str | None = None,
         message: str | None = None,
         author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
@@ -1108,7 +1082,7 @@ class Changes:
             author=author,
             authors=authors,
         )
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = CreateChangeBody(
             base_change_id=base_change_id,
             message=_opt(message),
@@ -1134,9 +1108,8 @@ class Changes:
         *,
         repo: str,
         change_id: str,
-        org: str | None = None,
     ) -> GetChangeResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_change.asyncio_detailed(
             resolved,
             repo,
@@ -1150,7 +1123,6 @@ class Changes:
         *,
         repo: str,
         change_id: str,
-        org: str | None = None,
         message: str | None = None,
         author: Author | None = None,
         authors: list[SigningKeyAuthor] | None = None,
@@ -1176,7 +1148,7 @@ class Changes:
             authors=authors,
             preserve_existing_authors=bool(resolutions),
         )
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = UpdateChangeBody(
             message=_opt(message),
             author=_to_update_author(body_author)
@@ -1216,9 +1188,8 @@ class Diffs:
         base_change_id: str,
         head_change_id: str,
         conflicts: DiffConflictFilter | None = None,
-        org: str | None = None,
     ) -> GetDiffResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await get_diff.asyncio_detailed(
             resolved,
             repo,
@@ -1240,11 +1211,10 @@ class WebhookTargets:
     async def list(
         self,
         *,
-        org: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
     ) -> ListWebhookTargetsResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await list_webhook_targets.asyncio_detailed(
             resolved,
             client=self._client,
@@ -1257,7 +1227,6 @@ class WebhookTargets:
         self,
         *,
         url: str,
-        org: str | None = None,
         name: str | None = None,
         events: list[str] | None = None,
         repo_ids: list[str] | None = None,
@@ -1269,7 +1238,7 @@ class WebhookTargets:
         :param repo_ids: Restrict deliveries to these repos. Defaults to
             all repos in the organization.
         """
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = CreateWebhookTargetBody(
             url=url,
             name=_opt(name),
@@ -1289,14 +1258,13 @@ class WebhookTargets:
         self,
         *,
         webhook_target_id: str,
-        org: str | None = None,
         url: str | None = None,
         name: str | None = None,
         events: list[str] | None = None,
         repo_ids: list[str] | None = None,
     ) -> UpdateWebhookTargetResponse200:
         """Only fields you pass are modified; omitted fields are left as-is."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = UpdateWebhookTargetBody(
             url=_opt(url),
             name=_opt(name),
@@ -1317,10 +1285,9 @@ class WebhookTargets:
         self,
         *,
         webhook_target_id: str,
-        org: str | None = None,
     ) -> UpdateWebhookTargetResponse200:
         """Remove the per-repo filter so the target receives every repo's events."""
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         body = UpdateWebhookTargetBody(repo_ids=None)
         resp = await update_webhook_target.asyncio_detailed(
             resolved,
@@ -1334,9 +1301,8 @@ class WebhookTargets:
         self,
         *,
         webhook_target_id: str,
-        org: str | None = None,
     ) -> DeleteWebhookTargetResponse200:
-        resolved = await self._resolve_org(org)
+        resolved = await self._resolve_org()
         resp = await delete_webhook_target.asyncio_detailed(
             resolved,
             webhook_target_id,

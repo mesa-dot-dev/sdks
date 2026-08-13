@@ -166,7 +166,6 @@ class Mesa:
         private_key: str | None = None,
         auth: MesaAuth | None = None,
         api_url: str = DEFAULT_API_URL,
-        org: str | None = None,
         user_agent: str | None = None,
         webhook_secret: str | None = None,
     ) -> None:
@@ -178,8 +177,6 @@ class Mesa:
         :param auth: Grouped credential containing exactly one ``private_key``
             or compact JWT ``access_token``.
         :param api_url: Override the default API endpoint.
-        :param org: Optional organization check. When supplied, it must match
-            the organization encoded in the private key or access token.
         :param user_agent: Custom ``User-Agent`` header.
         :param webhook_secret: Secret used by ``mesa.webhooks.receive(...)``.
 
@@ -194,23 +191,6 @@ class Mesa:
             raise InvalidOptionsError(
                 "User-agent metadata must not contain Mesa private key material."
             )
-        provided_org = org.strip() if org else None
-        if provided_org and looks_like_private_key(provided_org):
-            raise InvalidOptionsError(
-                "Organization options must not contain Mesa private key material."
-            )
-        if resolved_credential.kind is CredentialKind.PRIVATE_KEY:
-            assert isinstance(resolved_credential.value, PrivateKeyCredential)
-            if provided_org and provided_org != resolved_credential.value.org:
-                raise InvalidOptionsError(
-                    "The `org` option must match the organization encoded in the private key."
-                )
-        elif resolved_credential.kind is CredentialKind.ACCESS_TOKEN:
-            assert resolved_credential.org is not None
-            if provided_org and provided_org != resolved_credential.org:
-                raise InvalidOptionsError(
-                    "The `org` option must match the organization encoded in the access token."
-                )
         self._cached_whoami = None
 
         if resolved_credential.kind is CredentialKind.PRIVATE_KEY:
@@ -344,29 +324,13 @@ class Mesa:
             self._fs = FsNamespace(self)
         return self._fs
 
-    async def resolve_org(self, org: str | None = None) -> str:
-        """Return ``org`` if given, otherwise the client's default org.
-
-        The default is taken from the private key or access token.
-        """
-        requested_org = org.strip() if org else None
-        if requested_org and looks_like_private_key(requested_org):
-            raise InvalidOptionsError(
-                "Organization options must not contain Mesa private key material."
-            )
+    async def resolve_org(self) -> str:
+        """Return the organization encoded in the client's credential."""
         if self._credential.kind is CredentialKind.PRIVATE_KEY:
             assert isinstance(self._credential.value, PrivateKeyCredential)
-            if requested_org and requested_org != self._credential.value.org:
-                raise InvalidOptionsError(
-                    "Private-key clients are bound to the organization encoded in the key."
-                )
             return self._credential.value.org
         if self._credential.kind is CredentialKind.ACCESS_TOKEN:
             assert self._credential.org is not None
-            if requested_org and requested_org != self._credential.org:
-                raise InvalidOptionsError(
-                    "Access-token clients are bound to the organization encoded in the token."
-                )
             return self._credential.org
         raise AssertionError("unreachable credential kind")
 
