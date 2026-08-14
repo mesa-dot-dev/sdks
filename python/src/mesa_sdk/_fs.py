@@ -626,7 +626,11 @@ class MesaFileSystem:
         :param timeout_ms: Per-:meth:`Bash.exec` wall-clock timeout.
             Defaults to 30s.
         """
-        return self._native.bash(env=env, cwd=cwd, timeout_ms=timeout_ms)
+        return self._native.bash(
+            env=env,
+            cwd=cwd if cwd is not None else "/",
+            timeout_ms=timeout_ms,
+        )
 
 
 class LayoutDefinition:

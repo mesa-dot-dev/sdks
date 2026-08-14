@@ -585,6 +585,6 @@ export class MesaFileSystem implements IFileSystem {
   };
 
   bash(options?: MesaBashOptions): Bash {
-    return new Bash({ ...options, fs: this });
+    return new Bash({ ...options, cwd: options?.cwd ?? '/', fs: this });
   }
 }

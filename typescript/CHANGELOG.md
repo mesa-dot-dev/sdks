@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.0] - 2026-08-14
+
+### Changed
+
+- **Breaking:** Change the app-mount Bash default working directory from `/home/user` to `/`
+
 ## [0.46.0] - 2026-08-13
 
 ### Changed
