@@ -100,9 +100,9 @@ class Repo(_RepoRequired, total=False):
 
 # The mount-layout schema: a pure path map. Every key is an absolute
 # ("/"-prefixed) namespace path; the organization is not part of the
-# document — it comes from mount context (the client, or MESA_ORG for a
-# CLI mount). The Rust core validates the authoritative schema and
-# rejects any stray non-absolute key.
+# document. The client or CLI credential provides the mount context. The Rust
+# core validates the authoritative schema and rejects any stray non-absolute
+# key.
 LayoutSpec = Mapping[str, "Repo | Sequence[Repo]"]
 
 
@@ -646,11 +646,9 @@ class LayoutDefinition:
         # or hand the same definition to a CLI mount in a sandbox:
         sandbox.upload_file("layout.json", str(definition.layout()))
         token = (await definition.token()).token
-        # MESA_ORG names the CLI's organization; the token is only the
-        # credential.
         sandbox.exec(
             "mesa mount --layout=layout.json",
-            env={"MESA_ORG": "my-org", "MESA_ACCESS_TOKEN": token},
+            env={"MESA_ACCESS_TOKEN": token},
         )
     """
 

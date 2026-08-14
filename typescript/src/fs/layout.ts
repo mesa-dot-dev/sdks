@@ -89,9 +89,9 @@ export type Repo = {
  * The mount-layout schema: a pure path map. Every key is an absolute
  * (`/`-prefixed) namespace path — the compiler rejects non-absolute keys in
  * object literals, and pre-typed records with a stray non-absolute key fail
- * the early runtime check. The organization is not part of the document —
- * it comes from mount context (the client, or `MESA_ORG` for a CLI mount)
- * — so a layout file is portable shape.
+ * the early runtime check. The organization is not part of the document. The
+ * client or CLI credential provides the mount context, which keeps the layout
+ * file portable.
  */
 export type LayoutSpec = {
   [path: `/${string}`]: Repo | Repo[];
@@ -187,10 +187,8 @@ export function repo(selector: RepoSelectorInput, options: RepoOptions): Repo {
  *
  * The returned value is local; it does not create a server-stored resource.
  * Its string form deserializes as the core `LayoutSpec` consumed by
- * `mesa mount --layout`. The document carries no organization: the mount
- * that consumes it resolves every selector within the organization its
- * mount context provides — the client's organization, or `MESA_ORG` for
- * the CLI.
+ * `mesa mount --layout`. The document carries no organization. The client or
+ * CLI credential provides the mount context used to resolve its selectors.
  */
 export function createLayout(paths: LayoutSpec): Layout {
   // Pre-typed `Record<string, Repo | Repo[]>` values still assign to
