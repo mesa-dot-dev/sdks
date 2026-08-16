@@ -14,6 +14,8 @@ import { InvalidOptionsError, MissingCredentialError } from '../lib/errors.js';
 import type {
   NativeMesaFileSystem,
   NativeMesaFileSystemWatcher,
+  NativeConfig,
+  NativeLogRecord,
   NativeModule,
   NativeRepoConfig,
   NativeWatchEvent,
@@ -347,7 +349,7 @@ export class MesaFileSystemSubscription {
  *
  * Uses native Rust code via NAPI to provide a high-performance filesystem
  * backed by Mesa's cloud storage. The native addon is loaded lazily on the
- * first call to `MesaFileSystem.create()`.
+ * first call to `MesaFileSystem.create()` or `MesaFileSystem.createAsync()`.
  */
 export class MesaFileSystem implements IFileSystem {
   private native: NativeMesaFileSystem;
@@ -368,6 +370,24 @@ export class MesaFileSystem implements IFileSystem {
   }
 
   static create(config: MesaFileSystemConfig): MesaFileSystem {
+    const [napiConfig, onLog] = MesaFileSystem.nativeCreateArgs(config);
+    nativeModule ??= loadNativeAddon();
+    const nativeInstance = new nativeModule.MesaFileSystem(napiConfig, onLog);
+    return new MesaFileSystem(nativeInstance);
+  }
+
+  /** @internal Construct a ready filesystem without blocking the JavaScript event loop. */
+  static async createAsync(config: MesaFileSystemConfig): Promise<MesaFileSystem> {
+    const [napiConfig, onLog] = MesaFileSystem.nativeCreateArgs(config);
+    nativeModule ??= loadNativeAddon();
+    const nativeInstance = await nativeModule.MesaFileSystem.createAsync(napiConfig);
+    if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
+    return new MesaFileSystem(nativeInstance);
+  }
+
+  private static nativeCreateArgs(
+    config: MesaFileSystemConfig
+  ): [NativeConfig, ((record: NativeLogRecord) => void) | undefined] {
     const credential = config.credential ?? config.apiKey;
     if (!credential) {
       throw new MissingCredentialError();
@@ -376,7 +396,6 @@ export class MesaFileSystem implements IFileSystem {
       throw new InvalidOptionsError('MesaFileSystem requires an API key or access token, not a private key.');
     }
 
-    nativeModule ??= loadNativeAddon();
     const { onLog, ...telemetryRest } = config.telemetry ?? {};
     const { credential: _credential, apiKey: _apiKey, ...rest } = config;
     const napiConfig = {
@@ -388,8 +407,7 @@ export class MesaFileSystem implements IFileSystem {
       telemetry: Object.keys(telemetryRest).length > 0 ? telemetryRest : undefined,
       repos: config.repos.map(toNativeRepoConfig),
     };
-    const nativeInstance = new nativeModule.MesaFileSystem(napiConfig, onLog);
-    return new MesaFileSystem(nativeInstance);
+    return [napiConfig, onLog];
   }
 
   async readFile(path: string, options?: { encoding?: BufferEncoding | null } | BufferEncoding): Promise<string> {

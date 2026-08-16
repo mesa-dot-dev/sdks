@@ -434,7 +434,12 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
     this.fs = defineLayout as MesaFs<TOptions>;
   }
 
-  private createFs(org: string, fsOptions: FsMountRuntimeOptions, credential: string, layout: Layout): MesaFileSystem {
+  private createFs(
+    org: string,
+    fsOptions: FsMountRuntimeOptions,
+    credential: string,
+    layout: Layout
+  ): Promise<MesaFileSystem> {
     const config: MesaFileSystemConfig = {
       org,
       credential,
@@ -447,7 +452,7 @@ export class Mesa<const TOptions extends MesaOptions = MesaOptions> {
       layout,
       mountedRepos: 'all',
     };
-    return MesaFileSystem.create(config);
+    return MesaFileSystem.createAsync(config);
   }
 
   /**

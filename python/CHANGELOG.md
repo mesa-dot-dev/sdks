@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.47.1] - 2026-08-16
+
+### Fixed
+
+- Fix slow `mount()` initialization for layouts that specify a checked-out revision with `at`
+
 ## [0.47.0] - 2026-08-14
 
 ### Changed

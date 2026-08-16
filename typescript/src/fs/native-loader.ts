@@ -97,6 +97,7 @@ export interface NativeMesaFileSystemWatcher {
 }
 
 export interface NativeMesaFileSystem {
+  setLogCallback(callback: (record: NativeLogRecord) => void, logLevel?: string): void;
   readText(path: string, encoding?: string): Promise<string>;
   readBytes(path: string): Promise<Uint8Array>;
   writeText(path: string, content: string, encoding?: string): Promise<void>;
@@ -135,10 +136,10 @@ export interface NativeMesaFileSystem {
 }
 
 export interface NativeModule {
-  MesaFileSystem: new (
-    config: NativeConfig,
-    onLog?: ((record: NativeLogRecord) => void) | undefined | null
-  ) => NativeMesaFileSystem;
+  MesaFileSystem: {
+    new (config: NativeConfig, onLog?: ((record: NativeLogRecord) => void) | undefined | null): NativeMesaFileSystem;
+    createAsync(config: NativeConfig): Promise<NativeMesaFileSystem>;
+  };
   validateLayout: (layoutJson: string) => void;
 }
 
