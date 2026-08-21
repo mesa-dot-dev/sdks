@@ -1,6 +1,6 @@
 {
   "name": "@mesadev/sdk",
-  "version": "0.47.1",
+  "version": "0.47.2",
   "description": "Official Mesa TypeScript SDK",
   "type": "module",
   "sideEffects": false,
@@ -33,8 +33,8 @@
     "build": "pnpm run stamp:version && pnpm run clean && pnpm --dir ../rest/ts run build && tsc -b tsconfig.build.json"
   },
   "dependencies": {
-    "@mesadev/mesafs-napi": "0.47.1",
-    "@mesadev/rest": "0.47.1",
+    "@mesadev/mesafs-napi": "0.47.2",
+    "@mesadev/rest": "0.47.2",
     "just-bash": "^2.13.0",
     "zod": "catalog:"
   },
