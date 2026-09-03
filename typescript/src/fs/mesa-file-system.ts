@@ -15,7 +15,6 @@ import type {
   NativeMesaFileSystem,
   NativeMesaFileSystemWatcher,
   NativeConfig,
-  NativeLogRecord,
   NativeModule,
   NativeRepoConfig,
   NativeWatchEvent,
@@ -235,20 +234,8 @@ function toNativeRepoConfig(repo: RepoConfig): NativeRepoConfig {
 export interface MesaFileSystemConfigBase {
   org: string;
   repos: RepoConfig[];
-  /** Optional custom layout mounted as the complete namespace, in place of the canonical browse tree. */
-  layout?: Layout;
-  /**
-   * Which repos from the org show up in the mount.
-   *
-   * - `'all'` (or omitted) — mount every repo the API key can see.
-   * - `string[]` — mount only the listed repos. Scoping to a
-   *   known-small set avoids the full-org enumeration on `readdir('/')`
-   *   — useful for agents that only care about a few repos in a large org.
-   *
-   * Per-repo `rev` overrides in `repos` for names outside the mount list
-   * are accepted but silently unused — same as the TOML config.
-   */
-  mountedRepos?: string[] | 'all';
+  /** Layout mounted as the complete namespace. */
+  layout: Layout;
   cache?: {
     diskCache?: { path: string; maxSizeBytes?: number };
   };
@@ -257,26 +244,8 @@ export interface MesaFileSystemConfigBase {
   telemetry?: TelemetryConfig;
 }
 
-/**
- * Bearer credential used for all storage operations: either an access token
- * (JWT, the recommended self-expiring credential) or an API key.
- *
- * Provide it as `credential`. The legacy `apiKey` field is still accepted as a
- * deprecated alias; supply exactly one. When both are present, `credential` wins.
- */
-export type MesaFileSystemConfig = MesaFileSystemConfigBase &
-  (
-    | {
-        credential: string;
-        /** @deprecated Use `credential`. */
-        apiKey?: string;
-      }
-    | {
-        /** @deprecated Use `credential`. */
-        apiKey: string;
-        credential?: string;
-      }
-  );
+/** Bearer access token used for all storage operations. */
+export type MesaFileSystemConfig = MesaFileSystemConfigBase & { credential: string };
 
 function getEncoding(
   options?: { encoding?: BufferEncoding | null } | BufferEncoding | null | undefined
@@ -349,7 +318,7 @@ export class MesaFileSystemSubscription {
  *
  * Uses native Rust code via NAPI to provide a high-performance filesystem
  * backed by Mesa's cloud storage. The native addon is loaded lazily on the
- * first call to `MesaFileSystem.create()` or `MesaFileSystem.createAsync()`.
+ * first call to `MesaFileSystem.createAsync()`.
  */
 export class MesaFileSystem implements IFileSystem {
   private native: NativeMesaFileSystem;
@@ -369,45 +338,46 @@ export class MesaFileSystem implements IFileSystem {
     nativeModule.validateLayout(layoutJson);
   }
 
-  static create(config: MesaFileSystemConfig): MesaFileSystem {
-    const [napiConfig, onLog] = MesaFileSystem.nativeCreateArgs(config);
-    nativeModule ??= loadNativeAddon();
-    const nativeInstance = new nativeModule.MesaFileSystem(napiConfig, onLog);
-    return new MesaFileSystem(nativeInstance);
-  }
-
-  /** @internal Construct a ready filesystem without blocking the JavaScript event loop. */
+  /**
+   * @internal Open a filesystem from an already-minted access token.
+   *
+   * Not part of the public surface: `index.ts` exports this class as a type
+   * only. Callers go through `mesa.fs({ layout, authors }).mount()`, which
+   * derives the token's scopes from the layout and mints it for the mount.
+   * This path instead takes a token minted elsewhere, so its scopes and TTL
+   * are the caller's to get right. Neither path can refresh: when the token
+   * expires the mount fails closed, and resuming means signing a new token
+   * and opening a new filesystem.
+   *
+   * Rejects with {@link MissingCredentialError} when `credential` is empty and
+   * {@link InvalidOptionsError} when it is a private key rather than an access
+   * token.
+   */
   static async createAsync(config: MesaFileSystemConfig): Promise<MesaFileSystem> {
-    const [napiConfig, onLog] = MesaFileSystem.nativeCreateArgs(config);
-    nativeModule ??= loadNativeAddon();
-    const nativeInstance = await nativeModule.MesaFileSystem.createAsync(napiConfig);
-    if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
-    return new MesaFileSystem(nativeInstance);
-  }
-
-  private static nativeCreateArgs(
-    config: MesaFileSystemConfig
-  ): [NativeConfig, ((record: NativeLogRecord) => void) | undefined] {
-    const credential = config.credential ?? config.apiKey;
+    const credential = config.credential;
     if (!credential) {
       throw new MissingCredentialError();
     }
     if (looksLikePrivateKey(credential)) {
-      throw new InvalidOptionsError('MesaFileSystem requires an API key or access token, not a private key.');
+      throw new InvalidOptionsError('MesaFileSystem requires an access token, not a private key.');
     }
 
     const { onLog, ...telemetryRest } = config.telemetry ?? {};
-    const { credential: _credential, apiKey: _apiKey, ...rest } = config;
-    const napiConfig = {
+    const { credential: _credential, ...rest } = config;
+    const napiConfig: NativeConfig = {
       ...rest,
-      // The native config field is named apiKey for historical reasons; it
-      // accepts any bearer credential (access token or API key).
-      apiKey: credential,
-      layout: config.layout?.toString(),
+      credential,
+      layout: config.layout.toString(),
       telemetry: Object.keys(telemetryRest).length > 0 ? telemetryRest : undefined,
       repos: config.repos.map(toNativeRepoConfig),
     };
-    return [napiConfig, onLog];
+
+    nativeModule ??= loadNativeAddon();
+    const nativeInstance = await nativeModule.MesaFileSystem.createAsync(napiConfig);
+    // Registered after construction rather than passed into it: the native
+    // factory's future must be Send, and a JS function is bound to its thread.
+    if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
+    return new MesaFileSystem(nativeInstance);
   }
 
   async readFile(path: string, options?: { encoding?: BufferEncoding | null } | BufferEncoding): Promise<string> {

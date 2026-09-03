@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from enum import Enum, unique
 from typing import TYPE_CHECKING, TypeVar
 
 import httpx
@@ -19,14 +18,6 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 SDK_USER_AGENT = f"mesa-sdk-python/{__version__}"
-
-
-@unique
-class CredentialKind(Enum):
-    """How a Mesa client authenticates."""
-
-    PRIVATE_KEY = "private_key"
-    ACCESS_TOKEN = "access_token"
 
 
 class BearerAuth(httpx.Auth):
@@ -79,7 +70,7 @@ def request_credential(
 
 def create_client(
     *,
-    credential: str | BearerAuth,
+    credential: BearerAuth,
     api_url: str,
     user_agent: str | None = None,
 ) -> AuthenticatedClient:
@@ -88,22 +79,13 @@ def create_client(
     ua = f"{SDK_USER_AGENT} {suffix}" if suffix else SDK_USER_AGENT
     headers = {"User-Agent": ua}
 
-    if isinstance(credential, BearerAuth):
-        return AuthenticatedClient(
-            base_url=api_url,
-            token="",
-            prefix="",
-            headers=headers,
-            raise_on_unexpected_status=False,
-            httpx_args={"auth": credential},
-        )
-
     return AuthenticatedClient(
         base_url=api_url,
-        token=credential,
-        prefix="Bearer",
+        token="",
+        prefix="",
         headers=headers,
         raise_on_unexpected_status=False,
+        httpx_args={"auth": credential},
     )
 
 

@@ -35,7 +35,11 @@ export {
   type LayoutSpec,
   type LogRecord,
   type MesaBashOptions,
-  MesaFileSystem,
+  // Type-only: the filesystem is reachable exclusively through
+  // `mesa.fs({ layout, authors }).mount()`, which mints the mount's token
+  // with scopes derived from the layout. Exporting the class value would
+  // expose `createAsync` and `validateLayout` as a side door around that.
+  type MesaFileSystem,
   type MesaFileSystemConfig,
   MesaFileSystemSubscription,
   type MountMode,
@@ -51,7 +55,7 @@ export {
   type WatchEventHandler,
 } from './fs/index.js';
 export * from './lib/errors.js';
-export { type FsLayoutDefinition, type FsMountRuntimeOptions, Mesa, type MesaAuth, type MesaOptions } from './mesa.js';
+export { type FsLayoutDefinition, type FsMountRuntimeOptions, Mesa, type MesaOptions } from './mesa.js';
 export {
   type BookmarkCreatedPayload,
   BookmarkCreatedPayloadSchema,

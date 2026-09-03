@@ -22,9 +22,7 @@ from typing import (
     TypeAlias,
 )
 
-from mesa_sdk._client import CredentialKind
 from mesa_sdk._signing_key import (
-    NormalizedSigningKeyAuthors,
     looks_like_private_key,
     normalize_signing_key_authors,
 )
@@ -454,16 +452,20 @@ class MesaFileSystem:
         await self._native._close()
 
     @classmethod
-    async def connect(cls, config: MesaConfig) -> "MesaFileSystem":
-        """Open a filesystem from a :class:`MesaConfig`.
+    async def _connect(cls, config: MesaConfig) -> "MesaFileSystem":
+        """Open a filesystem from an already-minted access token.
 
-        Most users want :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`,
-        which manages credentials for you. Use this only when you already
-        own the credential's lifecycle.
+        Internal. Callers go through
+        :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`, which
+        derives the token's scopes from the layout and mints it for the mount.
+        This path instead takes a token minted elsewhere, so its scopes and
+        TTL are the caller's to get right. Neither path can refresh: when the
+        token expires the mount fails closed, and resuming means signing a new
+        token and opening a new filesystem.
         """
-        if looks_like_private_key(config.api_key):
+        if looks_like_private_key(config.credential):
             raise InvalidOptionsError(
-                "MesaConfig.api_key must contain a bearer credential, not a private key."
+                "MesaConfig.credential must contain a bearer credential, not a private key."
             )
         return cls(await _NativeMesaFileSystem.connect(config), config.org)
 
@@ -718,16 +720,13 @@ class FsNamespace:
         _, _, scopes, repo_names = await self._layout_token_request(
             layout, "mesa.fs(layout=...).token()"
         )
-        if authors is not None:
-            return await self._mesa.tokens.create(
-                scopes=scopes,
-                repos=repo_names,
-                authors=authors,
-                ttl_seconds=ttl,
-            )
-        return await self._mesa.tokens.create(
+        # The layout definition is the only public mint path; it signs through
+        # the client's private signer.
+        return await self._mesa._sign_token(
             scopes=scopes,
             repos=repo_names,
+            repo_ids=None,
+            authors=authors,
             ttl_seconds=ttl,
         )
 
@@ -751,17 +750,9 @@ class FsNamespace:
         """
         if authors is not None:
             normalize_signing_key_authors(authors)
-            if self._mesa._credential.kind is not CredentialKind.PRIVATE_KEY:
-                raise InvalidOptionsError(
-                    "Layout authors require a private-key client."
-                )
-        elif self._mesa._credential.kind is CredentialKind.PRIVATE_KEY:
+        else:
             raise InvalidOptionsError(
                 "Private-key layout definitions require a nonempty `authors` option."
-            )
-        if self._mesa._credential.kind is CredentialKind.ACCESS_TOKEN and ttl is not None:
-            raise InvalidOptionsError(
-                "The lifetime of an existing access token cannot be changed."
             )
         for path in layout:
             if not path.startswith("/"):
@@ -802,10 +793,9 @@ class FsNamespace:
 
         config = MesaConfig(
             org=org,
-            api_key=credential,
+            credential=credential,
             repos=[],
             layout=str(layout),
-            mounted_repos="all",
             api_base_url=self._mesa.api_url,
             disk_cache=disk_cache,
         )
@@ -863,7 +853,7 @@ class FsNamespace:
     ) -> AsyncIterator[MesaFileSystem]:
         fs: MesaFileSystem | None = None
         try:
-            fs = await MesaFileSystem.connect(config)
+            fs = await MesaFileSystem._connect(config)
             yield fs
         except BaseException:
             # The mount body raised. Still flush pending writes, but a flush

@@ -117,32 +117,29 @@ class MesaConfig:
     lifecycle yourself.
 
     :param org: The organization slug.
-    :param api_key: API key or access token with access to every repo in
+    :param credential: Bearer access token with access to every repo in
         ``repos``. Private keys are rejected.
     :param repos: Per-repo configuration. Each entry pins a repo to a
         bookmark or change.
-    :param mounted_repos: Restrict the mount to these repo names.
-        ``"all"`` or ``None`` mounts every repo the API key can access.
+    :param layout: Serialized layout mounted as the complete namespace.
     :param disk_cache: Optional on-disk cache placement.
     :param api_base_url: Override the default API endpoint.
     """
 
     org: str
-    api_key: str
+    credential: str
     repos: list[RepoConfig]
-    layout: str | None
-    mounted_repos: list[str] | Literal["all"] | None
+    layout: str
     disk_cache: DiskCacheConfig | None
     api_base_url: str | None
 
     def __new__(
         cls,
         org: str,
-        api_key: str,
+        credential: str,
         repos: Sequence[RepoConfig],
         *,
-        layout: str | None = None,
-        mounted_repos: list[str] | Literal["all"] | None = None,
+        layout: str,
         disk_cache: DiskCacheConfig | None = None,
         api_base_url: str | None = None,
     ) -> MesaConfig: ...

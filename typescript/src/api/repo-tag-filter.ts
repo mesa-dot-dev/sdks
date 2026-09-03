@@ -75,7 +75,8 @@ export type RepoTagFilter = {
   [tagKey: string]: RepoTagValueFilter | RepoTagFilter | RepoTagFilter[] | undefined;
 };
 
-export function serializeRepoTagsFilter(tags: RepoTagFilter | string | undefined): string | undefined {
+export function serializeRepoTagsFilter(tags: RepoTagFilter | undefined): string | undefined {
   if (tags === undefined) return tags;
-  return typeof tags === 'string' ? tags : JSON.stringify(tags);
+  if (typeof tags !== 'object') throw new TypeError('Repository tag filters must be objects');
+  return JSON.stringify(tags);
 }

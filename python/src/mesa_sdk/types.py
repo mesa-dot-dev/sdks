@@ -9,22 +9,6 @@ from typing import Literal, TypedDict, Union
 from mesa_rest.types import UNSET, Unset
 
 
-class _PrivateKeyAuth(TypedDict):
-    private_key: str
-
-
-class _AccessTokenAuth(TypedDict):
-    access_token: str
-
-
-MesaAuth = Union[_PrivateKeyAuth, _AccessTokenAuth]
-"""Grouped Mesa credential containing a private key or compact JWT access token.
-
-Supply exactly one field. Runtime validation rejects empty, ambiguous, or
-unknown credentials.
-"""
-
-
 class _SigningKeyAuthorRequired(TypedDict):
     name: str
 

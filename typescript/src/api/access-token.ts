@@ -12,7 +12,6 @@
  */
 
 import { randomUUID, sign as signEd25519 } from 'node:crypto';
-import type { CreateApiKeyData } from '@mesadev/rest';
 import { z } from 'zod';
 import { InvalidOptionsError } from '../lib/errors.js';
 import { looksLikePrivateKey } from './credentials.js';
@@ -29,8 +28,7 @@ const SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60; // 15 minutes
 const SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60; // 4 hours
 const MAX_SIGNING_KEY_AUTHORS = 100;
 
-type TokenScope = NonNullable<CreateApiKeyData['body']['scopes']>[number];
-const SIGNING_KEY_TOKEN_SCOPES = ['read', 'write', 'admin'] as const satisfies readonly TokenScope[];
+const SIGNING_KEY_TOKEN_SCOPES = ['read', 'write', 'admin'] as const;
 
 const signingKeyAuthorSchema = z.object({
   name: z

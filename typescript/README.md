@@ -17,16 +17,10 @@ bun add @mesadev/sdk
 ```ts
 import { Mesa } from '@mesadev/sdk';
 
-const mesa = new Mesa({
-  privateKey: process.env.MESA_PRIVATE_KEY,
-});
+const mesa = new Mesa({ privateKey: process.env.MESA_PRIVATE_KEY });
 
 // The organization comes from the key, so there is nothing to pass.
 const repo = await mesa.repos.create({ name: 'my-repo' });
-
-// Somewhere you trust less, use a short-lived token instead of the key.
-const scoped = new Mesa({ auth: { accessToken } });
-await scoped.repos.list();
 
 console.log(repo.name);
 ```
@@ -35,18 +29,15 @@ This package exposes org-inferred REST resources under `mesa.*`.
 
 ## Configuration
 
-`Mesa` accepts:
+`Mesa` accepts one optional configuration object. When `privateKey` is omitted, the SDK reads `MESA_PRIVATE_KEY` in Node.
 
-- `privateKey?: string` (falls back to `MESA_PRIVATE_KEY` in Node)
-- `auth?: { privateKey } | { accessToken }`
+- `privateKey?: string`
 - `apiUrl?: string` (defaults to `https://api.mesa.dev/v1`)
 - `fetch?: typeof fetch`
 - `userAgent?: string`
 - `webhookSecret?: string` (used by `mesa.webhooks.receive(...)`)
 
-Pass exactly one of `privateKey` or `auth`. When neither is present, the SDK reads `MESA_PRIVATE_KEY` in Node. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential.
-
-The TypeScript SDK does not accept API keys as client credentials and does not read `MESA_API_KEY`. API keys remain supported by the Mesa CLI and direct backend interfaces.
+The private key names its organization, so the client picks it up from the key.
 
 ### Scoped access tokens
 
@@ -61,7 +52,7 @@ const { token } = await mesa.tokens.create({
 });
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. A client built from an access token cannot mint another token.
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Pass scoped tokens to the Mesa CLI, MesaFS, or direct REST requests instead of constructing a TypeScript SDK client with them.
 
 ## Webhook Handlers
 
@@ -104,5 +95,5 @@ Use `@mesadev/rest` directly, or call the API with your own HTTP client, when yo
 If you previously used the older generated `@mesadev/sdk` package:
 
 - use `apiUrl` instead of `serverURL`
-- use the organization encoded in the private key or access token
+- use the organization encoded in the private key
 - use resource namespaces (`mesa.repos`, `mesa.changes`, etc.); install `@mesadev/rest` directly when you need generated REST operations

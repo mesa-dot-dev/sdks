@@ -36,14 +36,9 @@ A signing private key belongs in a process you trust. Give anything less trusted
 ```python
 # On a trusted host, where the private key lives.
 mesa = Mesa(private_key=os.environ["MESA_PRIVATE_KEY"])
-
-# Anywhere you were handed a token; the SDK forwards it unchanged.
-scoped = Mesa(auth={"access_token": access_token})
 ```
 
-Pass exactly one of `private_key` or `auth`. When neither is present, the SDK reads `MESA_PRIVATE_KEY`. Private keys and access tokens already name the organization they belong to, so the client picks it up from the credential.
-
-The Python SDK does not accept API keys as client credentials and does not read `MESA_API_KEY`. API keys remain supported by the Mesa CLI and direct backend interfaces.
+Pass a private key through `private_key`, or omit it to read `MESA_PRIVATE_KEY`. The SDK does not accept access tokens; pass scoped tokens to the CLI, mounted MesaFS environments, or direct REST calls instead.
 
 #### Scoped access tokens
 
@@ -58,7 +53,7 @@ minted = await mesa.tokens.create(
 )
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. A client built from an access token cannot mint another token.
+A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours.
 
 ### Repositories
 
@@ -120,16 +115,6 @@ diff = await mesa.diffs.get(
     base_change_id="abc123",
     head_change_id="def456",
 )
-```
-
-### API Key Management
-
-An admin-scoped private-key or access-token client can still create, list, and revoke API keys for CLI and direct backend integrations. The SDK cannot use the returned API key as its own credential.
-
-```python
-keys = await mesa.api_keys.list()
-key = await mesa.api_keys.create(name="ci-key", scopes=["read", "write"])
-await mesa.api_keys.revoke(key_id=key.id)
 ```
 
 ### Webhook Targets
@@ -323,7 +308,6 @@ response = await list_repos.asyncio_detailed("acme", client=client)
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Signing private key for trusted processes |
-| `auth` | `MesaAuth \| None` | `None` | A private key or an access token, passed as one object |
 | `api_url` | `str` | `https://api.mesa.dev/v1` | Base URL for the Mesa API |
 | `user_agent` | `str \| None` | `None` | Custom user agent suffix |
 | `webhook_secret` | `str \| None` | `None` | Secret used by `mesa.webhooks.receive(...)` |

@@ -45,10 +45,9 @@ export type NativeRepoConfig = NativeRepoConfigBase &
 
 export interface NativeConfig {
   org: string;
-  apiKey: string;
+  credential: string;
   repos: NativeRepoConfig[];
-  layout?: string;
-  mountedRepos?: string[] | 'all';
+  layout: string;
   cache?: {
     diskCache?: { path: string; maxSizeBytes?: number };
   };
@@ -136,8 +135,8 @@ export interface NativeMesaFileSystem {
 }
 
 export interface NativeModule {
+  /** Constructor-less: the addon exposes only the async factory. */
   MesaFileSystem: {
-    new (config: NativeConfig, onLog?: ((record: NativeLogRecord) => void) | undefined | null): NativeMesaFileSystem;
     createAsync(config: NativeConfig): Promise<NativeMesaFileSystem>;
   };
   validateLayout: (layoutJson: string) => void;

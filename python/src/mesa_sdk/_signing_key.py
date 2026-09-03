@@ -40,7 +40,6 @@ MAX_SIGNING_KEY_AUTHORS = 100
 _MESA_PRIVATE_KEY_BODY_PATTERN = re.compile(
     r"^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)_([A-Za-z0-9_-]+)$"
 )
-_ACCESS_TOKEN_ORG_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _PEM_PRIVATE_KEY_PATTERN = re.compile(
     r"^-----(?:BEGIN|END) (?:[A-Z0-9]+ )*PRIVATE KEY-----$",
     re.IGNORECASE | re.MULTILINE,
@@ -112,28 +111,6 @@ def _base64url_decode(value: str) -> bytes:
     if _base64url_encode(decoded) != value:
         raise ValueError("non-canonical base64url")
     return decoded
-
-
-def get_access_token_org(token: str) -> str:
-    """Read and validate the organization issuer from a compact JWT."""
-    try:
-        parts = token.split(".")
-        if len(parts) != 3 or any(not part for part in parts):
-            raise ValueError("invalid compact JWT")
-        encoded_payload = parts[1] + "=" * (-len(parts[1]) % 4)
-        payload: object = json.loads(base64.urlsafe_b64decode(encoded_payload))
-        if not isinstance(payload, Mapping):
-            raise ValueError("invalid JWT payload")
-        issuer = payload.get("iss")
-        if not isinstance(issuer, str) or _ACCESS_TOKEN_ORG_PATTERN.fullmatch(
-            issuer
-        ) is None:
-            raise ValueError("invalid organization issuer")
-        return issuer
-    except ValueError:
-        raise InvalidOptionsError(
-            "Access tokens must be compact JWTs with a valid organization `iss` claim."
-        ) from None
 
 
 def looks_like_private_key(value: str) -> bool:

@@ -1,8 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { parse as parseQueryString } from 'node:querystring';
 import {
-  type CreateApiKeyData,
-  type CreateApiKeyResponse,
   type CreateBookmarkData,
   type CreateBookmarkResponse,
   type CreateChangeData,
@@ -11,7 +9,6 @@ import {
   type CreateRepoResponse,
   type CreateWebhookTargetData,
   type CreateWebhookTargetResponse,
-  createApiKey,
   createBookmark,
   createChange,
   createRepo,
@@ -45,7 +42,6 @@ import {
   getOrg,
   getRepo,
   getRepoUpstreamSync,
-  type ListApiKeysResponse,
   type ListBookmarksData,
   type ListBookmarksResponse,
   type ListChangesData,
@@ -56,7 +52,6 @@ import {
   type ListRepoUpstreamSyncsResponse,
   type ListWebhookTargetsData,
   type ListWebhookTargetsResponse,
-  listApiKeys,
   listBookmarks,
   listChanges,
   listRepos,
@@ -68,9 +63,6 @@ import {
   type MoveBookmarkResponse,
   mergeBookmark,
   moveBookmark,
-  type RevokeApiKeyData,
-  type RevokeApiKeyResponse,
-  revokeApiKey,
   type SyncUpstreamData,
   type SyncUpstreamResponse,
   syncUpstream,
@@ -105,23 +97,16 @@ function sign(secret: string, timestamp: number, rawBody: string): string {
 
 type NormalizedSigningKeyAuthors = ReturnType<typeof normalizeSigningKeyAuthors>;
 
-type RequestAttribution =
-  | { kind: 'fixed-token' }
-  | { kind: 'private-key'; sign: (authors: NormalizedSigningKeyAuthors) => string };
+type RequestAttribution = {
+  sign: (authors: NormalizedSigningKeyAuthors) => string;
+};
 
 type OrgRequestContext = {
   restClient: RestClient;
   orgSlug: string;
   webhookSecret?: string;
-  /** Sign an access token locally with the configured private key. */
-  signToken: (input: TokensCreateInput) => Promise<TokensCreateResponse>;
   requestAttribution: RequestAttribution;
 };
-
-/** @deprecated Part of the API-key management surface; prefer private keys created in the dashboard. */
-type ApiKeysCreateInput = CreateApiKeyData['body'];
-/** @deprecated Part of the API-key management surface; prefer private keys created in the dashboard. */
-type ApiKeysRevokeInput = Omit<RevokeApiKeyData['path'], 'org'>;
 
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
 
@@ -133,7 +118,7 @@ type TokensCreateBase = ApiRepositoryRestriction & {
   scopes?: string[];
 };
 
-/** `tokens.create()` input for private-key clients. */
+/** Private-key input accepted by the SDK's internal token signer. */
 export type TokensCreatePrivateKeyInput = TokensCreateBase & {
   /** Ordered, nonempty commit attribution encoded into the token. */
   authors: NonEmptyReadonlyArray<TokensCreateAuthor>;
@@ -143,7 +128,7 @@ export type TokensCreatePrivateKeyInput = TokensCreateBase & {
 
 export type TokensCreateInput = TokensCreatePrivateKeyInput;
 
-/** Result of `tokens.create()`. */
+/** Result of minting a layout-scoped token with `mesa.fs({ layout }).token()`. */
 export type TokensCreateResponse = RepositoryRestriction<'repos', 'repo_ids'> & {
   token: string;
   /** Exact expiry as an ISO 8601 string. */
@@ -152,8 +137,8 @@ export type TokensCreateResponse = RepositoryRestriction<'repos', 'repo_ids'> & 
 };
 
 type ReposListInput = Omit<NonNullable<ListReposData['query']>, 'tags'> & {
-  /** Structured tag filter object. Legacy strings are accepted for existing callers. */
-  tags?: RepoTagFilter | string;
+  /** Structured tag filter object. */
+  tags?: RepoTagFilter;
 };
 type ReposCreateInput = CreateRepoData['body'];
 type ReposGetInput = Omit<GetRepoData['path'], 'org'>;
@@ -180,12 +165,7 @@ type PrivateKeyCommitAuthors = {
   authors: NonEmptyReadonlyArray<SigningKeyAuthorInput>;
 };
 
-type NoCommitAttribution = {
-  authors?: never;
-};
-
 export type PrivateKeyBookmarksMergeInput = BookmarksMergeInput & PrivateKeyCommitAuthors;
-export type FixedTokenBookmarksMergeInput = BookmarksMergeInput & NoCommitAttribution;
 
 type ChangesListInput = Omit<ListChangesData['path'], 'org'> & NonNullable<ListChangesData['query']>;
 
@@ -226,7 +206,6 @@ export type ChangesPatchInput = Omit<UpdateChangeData['path'], 'org'> & UpdateCh
 type DistributiveOmit<T, TKey extends PropertyKey> = T extends unknown ? Omit<T, TKey> : never;
 
 export type PrivateKeyChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & PrivateKeyCommitAuthors;
-export type FixedTokenChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & NoCommitAttribution;
 
 type ChangesPatchWithoutAttribution = Omit<ChangesPatchInput, 'author' | 'resolutions'>;
 
@@ -236,7 +215,6 @@ export type PrivateKeyChangesPatchInput =
       resolutions: NonEmptyReadonlyArray<NonNullable<ChangesPatchInput['resolutions']>[number]>;
       authors?: never;
     });
-export type FixedTokenChangesPatchInput = Omit<ChangesPatchInput, 'author'> & NoCommitAttribution;
 
 type DiffsGetInput = Omit<GetDiffData['path'], 'org'> & NonNullable<GetDiffData['query']>;
 
@@ -259,13 +237,6 @@ function prepareCommitRequest(
   const hasAuthor = author !== undefined;
   const hasAuthors = authors !== undefined;
 
-  if (requestAttribution.kind === 'fixed-token') {
-    if (hasAuthor || hasAuthors) {
-      throw new InvalidOptionsError('Access-token authors are fixed when the token is minted.');
-    }
-    return { body: input };
-  }
-
   const { author: _author, authors: _authors, ...body } = input;
   if (preserveExistingAuthors) {
     if (hasAuthor || hasAuthors) {
@@ -286,13 +257,7 @@ function prepareCommitRequest(
   return { body, credential: requestAttribution.sign(normalizedAuthors) };
 }
 
-export function createApiResources({
-  restClient,
-  orgSlug: org,
-  webhookSecret,
-  signToken,
-  requestAttribution,
-}: OrgRequestContext) {
+export function createApiResources({ restClient, orgSlug: org, webhookSecret, requestAttribution }: OrgRequestContext) {
   const webhookListeners: { [K in WebhookEventName]: WebhookHandler<K>[] } = {
     'repo.created': [],
     'repo.updated': [],
@@ -317,30 +282,6 @@ export function createApiResources({
         return restClient.request(getOrg, { path: { org } });
       },
     } as const),
-    tokens: {
-      /** Sign locally with a private key. Static access-token clients cannot mint another token. */
-      create: (input: TokensCreateInput) => signToken(input),
-    },
-    /**
-     * @deprecated Manage API keys from the dashboard and authenticate new
-     * integrations with private keys instead. API keys remain supported for
-     * existing integrations.
-     */
-    apiKeys: {
-      /** @deprecated Prefer private keys created in the dashboard. */
-      list: async (): Promise<ListApiKeysResponse> => {
-        return restClient.request(listApiKeys, { path: { org } });
-      },
-      /** @deprecated Prefer private keys created in the dashboard. */
-      create: async (input: ApiKeysCreateInput): Promise<CreateApiKeyResponse> => {
-        return restClient.request(createApiKey, { path: { org }, body: input });
-      },
-      /** @deprecated Prefer private keys created in the dashboard. */
-      revoke: async (input: ApiKeysRevokeInput): Promise<RevokeApiKeyResponse> => {
-        const { id } = input;
-        return restClient.request(revokeApiKey, { path: { id, org } });
-      },
-    },
     repos: {
       list: async (input: ReposListInput = {}): Promise<ListReposResponse> => {
         const { tags, ...queryInput } = input;
@@ -402,7 +343,7 @@ export function createApiResources({
         const { repo, bookmark, ...body } = input;
         return restClient.request(moveBookmark, { path: { org, repo, bookmark }, body });
       },
-      merge: async (input: BookmarksMergeInput): Promise<MergeBookmarkResponse> => {
+      merge: async (input: PrivateKeyBookmarksMergeInput): Promise<MergeBookmarkResponse> => {
         const { repo, ...body } = input;
         const prepared = prepareCommitRequest(body, requestAttribution);
         return restClient.request(
@@ -420,7 +361,7 @@ export function createApiResources({
         const { repo, ...query } = input;
         return restClient.request(listChanges, { path: { org, repo }, query });
       },
-      create: async (input: ChangesCreateInput): Promise<CreateChangeResponse> => {
+      create: async (input: PrivateKeyChangesCreateInput): Promise<CreateChangeResponse> => {
         const { repo, ...body } = input;
         const prepared = prepareCommitRequest(body, requestAttribution);
         return restClient.request(
@@ -433,7 +374,7 @@ export function createApiResources({
         const { repo, change_id: changeId } = input;
         return restClient.request(getChange, { path: { org, repo, change_id: changeId } });
       },
-      patch: async (input: ChangesPatchInput): Promise<UpdateChangeResponse> => {
+      patch: async (input: PrivateKeyChangesPatchInput): Promise<UpdateChangeResponse> => {
         const { repo, change_id: changeId, ...body } = input;
         const preserveExistingAuthors = Array.isArray(body.resolutions) && body.resolutions.length > 0;
         const prepared = prepareCommitRequest(body, requestAttribution, preserveExistingAuthors);

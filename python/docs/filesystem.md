@@ -38,7 +38,7 @@ declarations. Call `mesa.fs(layout=..., authors=..., ttl=...)` to build a
 `definition.mount()` is an async context manager. When you enter it, the SDK:
 
 1. Signs one short-lived, layout-scoped access token (JWT) locally from your
-   private key (or API key). The token's repo scope is encoded as full
+   private key. The token's repo scope is encoded as full
    `org/repo` names collected from the layout. Scopes are `["read"]` when every
    declaration is `"ro"`, otherwise `["read", "write"]`.
 2. Connects to the Mesa VCS backend and yields a `MesaFileSystem` whose
@@ -62,8 +62,8 @@ async with mesa.fs(
 Paths inside the mount are whatever the layout declares — for example
 `/workspace/src/main.py`, not `/org/repo/...`.
 
-Private-key clients **require** `authors` on the definition. API-key and
-access-token clients reject `authors`.
+Private-key clients **require** `authors` on the definition. Access-token
+clients reject `authors`.
 
 ### Token lifetime (`ttl`)
 
@@ -81,10 +81,8 @@ async with mesa.fs(
     ...
 ```
 
-`ttl` defaults to `900` (15 minutes) for private-key clients and is capped at
-`14_400` (4 hours). API-key clients default to `3600` (1 hour) up to `86400`
-(24 hours). A value outside the credential's range raises
-`InvalidOptionsError`. Access-token clients cannot set `ttl`.
+`ttl` defaults to `900` (15 minutes) and is capped at `14_400` (4 hours). A
+value outside that range raises `InvalidOptionsError`.
 
 ### Minting a layout token without mounting
 

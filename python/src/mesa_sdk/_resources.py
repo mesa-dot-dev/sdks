@@ -3,12 +3,8 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import Enum, unique
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Union
-
-# assert_never is in `typing` only from 3.11; this package supports 3.10.
-from typing_extensions import assert_never
 
 from mesa_rest.api.bookmark import (
     create_bookmark,
@@ -26,12 +22,7 @@ from mesa_rest.api.change import (
     update_change,
 )
 from mesa_rest.api.content import get_content
-from mesa_rest.api.org import (
-    create_api_key,
-    get_org,
-    list_api_keys,
-    revoke_api_key,
-)
+from mesa_rest.api.org import get_org
 from mesa_rest.api.repo import (
     create_repo,
     delete_repo,
@@ -48,8 +39,6 @@ from mesa_rest.api.webhook_target import (
     list_webhook_targets,
     update_webhook_target,
 )
-from mesa_rest.models.create_api_key_body import CreateApiKeyBody
-from mesa_rest.models.create_api_key_body_scopes_item import CreateApiKeyBodyScopesItem
 from mesa_rest.models.create_bookmark_body import CreateBookmarkBody
 from mesa_rest.models.create_change_body import CreateChangeBody
 from mesa_rest.models.create_change_body_committer import CreateChangeBodyCommitter
@@ -142,7 +131,6 @@ from mesa_sdk.types import (
 
 if TYPE_CHECKING:
     from mesa_rest.client import AuthenticatedClient
-    from mesa_rest.models.create_api_key_response_201 import CreateApiKeyResponse201
     from mesa_rest.models.create_bookmark_response_201 import CreateBookmarkResponse201
     from mesa_rest.models.create_change_response_201 import CreateChangeResponse201
     from mesa_rest.models.create_repo_response_201 import CreateRepoResponse201
@@ -165,7 +153,6 @@ if TYPE_CHECKING:
     from mesa_rest.models.get_diff_response_200 import GetDiffResponse200
     from mesa_rest.models.get_org_response_200 import GetOrgResponse200
     from mesa_rest.models.get_repo_response_200 import GetRepoResponse200
-    from mesa_rest.models.list_api_keys_response_200 import ListApiKeysResponse200
     from mesa_rest.models.list_bookmarks_response_200 import ListBookmarksResponse200
     from mesa_rest.models.list_changes_response_200 import ListChangesResponse200
     from mesa_rest.models.list_repos_response_200 import ListReposResponse200
@@ -174,7 +161,6 @@ if TYPE_CHECKING:
     )
     from mesa_rest.models.merge_bookmark_response_200 import MergeBookmarkResponse200
     from mesa_rest.models.move_bookmark_response_200 import MoveBookmarkResponse200
-    from mesa_rest.models.revoke_api_key_response_200 import RevokeApiKeyResponse200
     from mesa_rest.models.sync_upstream_response_201 import SyncUpstreamResponse201
     from mesa_rest.models.update_change_response_200 import UpdateChangeResponse200
     from mesa_rest.models.update_repo_response_200 import UpdateRepoResponse200
@@ -183,23 +169,12 @@ if TYPE_CHECKING:
     )
 
 
-@unique
-class AttributionKind(Enum):
-    """How commit-producing REST requests carry author attribution."""
-
-    #: Private-key clients: authors signed into a per-request token.
-    PRIVATE_KEY = "private_key"
-    #: Access-token clients: authors fixed when the token was minted.
-    FIXED_TOKEN = "fixed_token"
-
-
 @dataclass(frozen=True)
 class RequestAttribution:
-    """The credential-appropriate author handling for this client's requests."""
+    """Private-key author handling for commit-producing requests."""
 
-    kind: AttributionKind
-    sign: Callable[[NormalizedSigningKeyAuthors], str] | None = None
-    auth: BearerAuth | None = None
+    sign: Callable[[NormalizedSigningKeyAuthors], str]
+    auth: BearerAuth
 
 
 def _prepare_commit_request(
@@ -208,42 +183,29 @@ def _prepare_commit_request(
     authors: list[SigningKeyAuthor] | None,
     preserve_existing_authors: bool = False,
 ) -> str | None:
-    match attribution.kind:
-        case AttributionKind.FIXED_TOKEN:
-            if authors is not None:
-                raise InvalidOptionsError(
-                    "Access-token authors are fixed when the token is minted."
-                )
-            return None
+    if preserve_existing_authors:
+        if authors is not None:
+            raise InvalidOptionsError(
+                "Conflict-resolution patches preserve the existing commit authors."
+            )
+        return None
 
-        case AttributionKind.PRIVATE_KEY:
-            if preserve_existing_authors:
-                if authors is not None:
-                    raise InvalidOptionsError(
-                        "Conflict-resolution patches preserve the existing "
-                        "commit authors."
-                    )
-                return None
-
-            if authors is None:
-                raise InvalidOptionsError(
-                    "Private-key commit operations require a nonempty `authors` list."
-                )
-            normalized_authors = normalize_signing_key_authors(authors)
-            assert attribution.sign is not None
-            return attribution.sign(normalized_authors)
-
-        case _:
-            assert_never(attribution.kind)
+    if authors is None:
+        raise InvalidOptionsError(
+            "Private-key commit operations require a nonempty `authors` list."
+        )
+    return attribution.sign(normalize_signing_key_authors(authors))
 
 
 def _opt(value: object) -> Any:
     return UNSET if value is None else value
 
 
-def _serialize_tags_filter(tags: str | Mapping[str, Any] | None) -> str | None:
-    if tags is None or isinstance(tags, str):
-        return tags
+def _serialize_tags_filter(tags: Mapping[str, Any] | None) -> str | None:
+    if tags is None:
+        return None
+    if not isinstance(tags, Mapping):
+        raise TypeError("Repository tag filters must be mappings")
     return json.dumps(tags, separators=(",", ":"))
 
 
@@ -477,7 +439,7 @@ class OrgResource:
 
 @dataclass(frozen=True)
 class TokenCreateResult:
-    """Result of :meth:`Tokens.create`.
+    """Result of :meth:`LayoutDefinition.token`.
 
     Shape-compatible with the response the deleted ``POST /v1/:org/tokens``
     endpoint returned, so existing callers keep working unchanged.
@@ -507,131 +469,6 @@ class TokenSigner(Protocol):
     ) -> TokenCreateResult: ...
 
 
-class Tokens:
-    """Access-token signing: ``mesa.tokens``.
-
-    Tokens are short-lived Ed25519 JWTs that expire on their own and cannot be
-    revoked or refreshed. Sign a new one instead. Signing is entirely local.
-    """
-
-    def __init__(self, sign_token: TokenSigner) -> None:
-        self._sign_token = sign_token
-
-    async def create(
-        self,
-        *,
-        scopes: list[str] | None = None,
-        repos: list[str] | None = None,
-        repo_ids: list[str] | None = None,
-        authors: list[SigningKeyAuthor] | None = None,
-        ttl_seconds: int | None = None,
-    ) -> TokenCreateResult:
-        """Sign a short-lived access token (JWT) carrying at most this client's
-        scopes and repository restrictions.
-
-        Private-key clients must pass a non-empty ordered ``authors`` list.
-        Static access-token clients cannot mint another token.
-
-        :param scopes: Token scopes (``"read"``, ``"write"``, ``"admin"``).
-            Defaults to ``["read", "write"]``.
-        :param repos: Restrict the token to these repos, as full ``org/repo``
-            names. Defaults to no extra restriction.
-        :param repo_ids: Restrict the token by canonical repository ID.
-            Mutually exclusive with ``repos``.
-        :param authors: Ordered commit attribution for a private-key token.
-        :param ttl_seconds: Token lifetime in seconds. Defaults to 900 and
-            allows up to 14400.
-
-        :raises InvalidOptionsError: If ``ttl_seconds`` is out of range.
-        """
-        return await self._sign_token(
-            scopes=scopes,
-            repos=repos,
-            repo_ids=repo_ids,
-            authors=authors,
-            ttl_seconds=ttl_seconds,
-        )
-
-
-class ApiKeys:
-    """API key management: ``mesa.api_keys``.
-
-    Deprecated: prefer private keys created in the dashboard. API keys
-    remain supported for existing integrations.
-    """
-
-    def __init__(self, client: AuthenticatedClient, org_slug: str) -> None:
-        self._client = client
-        self._org_slug = org_slug
-
-    async def list(
-        self,
-        *,
-        cursor: str | None = None,
-        limit: int | None = None,
-    ) -> ListApiKeysResponse200:
-        """List the organization's API keys.
-
-        Deprecated: prefer private keys created in the dashboard. API keys
-        remain supported for existing integrations.
-        """
-        resp = await list_api_keys.asyncio_detailed(
-            self._org_slug,
-            client=self._client,
-            cursor=_opt(cursor),
-            limit=_opt(limit),
-        )
-        return unwrap(resp)
-
-    async def create(
-        self,
-        *,
-        name: str | None = None,
-        scopes: list[str] | None = None,
-        repo_ids: list[str] | None = None,
-        expires_in_seconds: int | None = None,
-    ) -> CreateApiKeyResponse201:
-        """Mint a new API key.
-
-        Deprecated: prefer private keys created in the dashboard. API keys
-        remain supported for existing integrations.
-
-        :param scopes: Permission scopes (``"read"``, ``"write"``).
-            Defaults to ``["read", "write"]`` when omitted.
-        :param repo_ids: Restrict the key to these repos. Defaults to
-            all repos in the organization.
-        :param expires_in_seconds: Server-side TTL. Without this, the
-            key never expires until revoked.
-        """
-        body = CreateApiKeyBody(
-            name=_opt(name),
-            scopes=[CreateApiKeyBodyScopesItem(s) for s in scopes]
-            if scopes is not None
-            else UNSET,
-            repo_ids=_opt(repo_ids),
-            expires_in_seconds=_opt(expires_in_seconds),
-        )
-        resp = await create_api_key.asyncio_detailed(
-            self._org_slug,
-            client=self._client,
-            body=body,
-        )
-        return unwrap(resp)
-
-    async def revoke(self, *, key_id: str) -> RevokeApiKeyResponse200:
-        """Revoke ``key_id``. Subsequent requests using the key fail with 401.
-
-        Deprecated: prefer private keys created in the dashboard. API keys
-        remain supported for existing integrations.
-        """
-        resp = await revoke_api_key.asyncio_detailed(
-            self._org_slug,
-            key_id,
-            client=self._client,
-        )
-        return unwrap(resp)
-
-
 class Repos:
     """Repository management: ``mesa.repos``."""
 
@@ -644,7 +481,7 @@ class Repos:
         *,
         cursor: str | None = None,
         limit: int | None = None,
-        tags: str | Mapping[str, Any] | None = None,
+        tags: Mapping[str, Any] | None = None,
     ) -> ListReposResponse200:
         resp = await list_repos.asyncio_detailed(
             self._org_slug,
