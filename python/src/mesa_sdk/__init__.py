@@ -3,11 +3,12 @@
 from mesa_sdk._constants import VIRTUAL_ROOT_CHANGE_ID
 from mesa_sdk._version import __version__ as __version__
 from mesa_sdk._fs import (
+    AccessToken,
     BookmarksOps,
     ChangesOps,
+    FilesystemDefinition,
     FsNamespace,
     Layout,
-    LayoutDefinition,
     LayoutSpec,
     MesaFileSystem,
     MesaFileSystemSubscription,
@@ -26,7 +27,6 @@ from mesa_sdk._native import (
     DiskCacheConfig,
     ExecResult,
     FsStat,
-    MesaConfig,
     MountMode,
     RepoConfig,
 )
@@ -50,6 +50,11 @@ from mesa_sdk.errors import (
 )
 from mesa_sdk.types import (
     Author,
+    Change,
+    ChangeDetails,
+    ChangesPage,
+    CommitIdentity,
+    CommitSignature,
     ConflictSide,
     DiffConflictFilter,
     FileChange,
@@ -71,15 +76,21 @@ from mesa_sdk._webhooks import (
 )
 
 __all__ = [
+    "AccessToken",
     "ApiError",
     "AuthenticationError",
     "Author",
     "AuthorizationError",
     "Bash",
     "BookmarksOps",
+    "Change",
+    "ChangeDetails",
     "ChangeInfo",
+    "ChangesPage",
     "CheckpointResult",
     "ChangesOps",
+    "CommitIdentity",
+    "CommitSignature",
     "ConflictError",
     "ConflictSide",
     "DiffConflictFilter",
@@ -88,6 +99,7 @@ __all__ = [
     "FileChange",
     "FileDelete",
     "FileUpsert",
+    "FilesystemDefinition",
     "FsNamespace",
     "FsStat",
     "HunkFix",
@@ -95,10 +107,8 @@ __all__ = [
     "InvalidApiUrlError",
     "InvalidOptionsError",
     "Layout",
-    "LayoutDefinition",
     "LayoutSpec",
     "Mesa",
-    "MesaConfig",
     "MesaError",
     "MesaFileSystem",
     "MesaFileSystemSubscription",

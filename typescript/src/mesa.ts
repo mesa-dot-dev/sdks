@@ -1,18 +1,11 @@
 import type { WhoamiResponse } from '@mesadev/rest';
 import {
   normalizeSigningKeyAuthors,
-  signPrivateKeyAccessToken,
-  toApiRepositoryRestriction,
-  toSignerRepositoryRestriction,
+  signAutomaticPrivateKeyAccessToken,
+  type SigningKeyAuthorInput,
 } from './api/access-token.js';
 import { createRestClient, type RestClient } from './api/client.js';
-import {
-  type ApiResources,
-  createApiResources,
-  type TokensCreateInput,
-  type TokensCreatePrivateKeyInput,
-  type TokensCreateResponse,
-} from './api/resources.js';
+import { type ApiResources, createApiResources } from './api/resources.js';
 import { looksLikePrivateKey } from './api/credentials.js';
 import { parsePrivateKey, type PrivateKeyCredential } from './api/signing-key.js';
 import { createLayout, type Layout, type LayoutSpec, type Repo } from './fs/layout.js';
@@ -22,8 +15,6 @@ import { InvalidApiUrlError, InvalidOptionsError, MissingCredentialError, OrgRes
 const DEFAULT_API_URL = 'https://api.mesa.dev/v1';
 const PRIVATE_KEY_ENV_VAR = 'MESA_PRIVATE_KEY';
 
-/** Default minted-token scopes and least-authority MesaFS mount scopes. */
-const DEFAULT_TOKEN_SCOPES: ['read', 'write'] = ['read', 'write'];
 function getEnvVar(name: string): string | undefined {
   if (typeof process === 'undefined') {
     return undefined;
@@ -68,7 +59,10 @@ function resolvePrivateKey(privateKey: string | undefined): PrivateKeyCredential
   throw new MissingCredentialError('Missing credential. Pass a private key or set `MESA_PRIVATE_KEY`.');
 }
 
-type PrivateKeyAuthors = NonNullable<TokensCreatePrivateKeyInput['authors']>;
+/** Commit attribution carried by a layout-scoped access token. */
+export type FsLayoutAuthor = SigningKeyAuthorInput;
+
+type PrivateKeyAuthors = readonly [FsLayoutAuthor, ...FsLayoutAuthor[]];
 
 export interface MesaOptions {
   /** Organization-root Ed25519 private key used to sign request and filesystem credentials locally. */
@@ -79,7 +73,7 @@ export interface MesaOptions {
   webhookSecret?: string;
 }
 
-/** Non-token options accepted by {@link FsLayoutDefinition.mount}. */
+/** Non-token options accepted by {@link FilesystemDefinition.mount}. */
 export interface FsMountRuntimeOptions {
   cache?: {
     diskCache?: { path: string; maxSizeBytes?: number };
@@ -94,7 +88,7 @@ export interface FsMountRuntimeOptions {
  * every token minted from it, whether by `token()` or under the hood by
  * `mount()`.
  */
-export interface FsLayoutDefinition {
+export interface FilesystemDefinition {
   /** The prepared layout, built from the raw path map the definition was given. */
   layout(): Layout;
   /**
@@ -104,13 +98,18 @@ export interface FsLayoutDefinition {
    */
   mount(options?: FsMountRuntimeOptions): Promise<MesaFileSystem>;
   /**
-   * Mint the layout-scoped, least-privilege access token: repositories
-   * collected from every declaration and scoped by name, `['read']` when
-   * every mode is `'ro'`, `['read', 'write']` otherwise, with the
-   * definition's `ttl`.
+   * Mint the layout-scoped, least-privilege access token. Repository names map
+   * to `read-repo` or `write-repo` according to each declaration's mode, and
+   * the token uses the definition's `ttl`.
    */
-  token(): Promise<TokensCreateResponse>;
+  token(): Promise<AccessToken>;
 }
+
+export type AccessToken = {
+  token: string;
+  /** Exact expiry as an ISO 8601 string. */
+  expires_at: string;
+};
 
 type FsLayoutOptions = {
   layout: LayoutSpec;
@@ -138,7 +137,7 @@ export class Mesa {
   readonly diffs: ApiResources['diffs'];
   readonly webhookTargets: ApiResources['webhookTargets'];
   readonly webhooks: ApiResources['webhooks'];
-  readonly fs: (options: FsLayoutOptions) => FsLayoutDefinition;
+  readonly fs: (options: FsLayoutOptions) => FilesystemDefinition;
 
   private readonly credential: PrivateKeyCredential;
   private readonly restClient: RestClient;
@@ -164,7 +163,7 @@ export class Mesa {
       throw new InvalidOptionsError('User-agent metadata must not contain Mesa private key material.');
     }
     this.restClient = createRestClient({
-      credential: () => signPrivateKeyAccessToken({ credential }).token,
+      credential: () => signAutomaticPrivateKeyAccessToken({ privateKey: credential, admin: true }).token,
       apiUrl: this.apiUrl,
       fetch: options.fetch,
       userAgent: options.userAgent,
@@ -175,7 +174,7 @@ export class Mesa {
       orgSlug: credential.org,
       webhookSecret: options.webhookSecret,
       requestAttribution: {
-        sign: (authors) => signPrivateKeyAccessToken({ credential, authors }).token,
+        sign: (authors) => signAutomaticPrivateKeyAccessToken({ privateKey: credential, authors, admin: true }).token,
       },
     });
 
@@ -193,18 +192,24 @@ export class Mesa {
     const mintLayoutToken = async (
       layout: Layout,
       ttl: number | undefined,
-      authors: PrivateKeyAuthors | undefined
-    ): Promise<TokensCreateResponse> => {
-      const { scopes, repos } = this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
+      authors: PrivateKeyAuthors
+    ): Promise<AccessToken> => {
+      const { access } = this.deriveLayoutTokenRequest(layout, 'mesa.fs({ layout }).token()');
       // The layout definition is the only public mint path; it signs through
-      // the client's private signer.
-      return this.signToken({ scopes, repos, ttl_seconds: ttl, authors: authors! });
+      // the client's private signer and can never request `admin`.
+      const signed = signAutomaticPrivateKeyAccessToken({
+        privateKey: this.credential,
+        authors,
+        access,
+        ttlSeconds: ttl,
+      });
+      return { token: signed.token, expires_at: signed.expiresAt };
     };
 
     const mountLayout = async (
       definitionLayout: Layout,
       ttl: number | undefined,
-      authors: PrivateKeyAuthors | undefined,
+      authors: PrivateKeyAuthors,
       options: FsMountRuntimeOptions
     ): Promise<MesaFileSystem> => {
       // Untyped callers migrating from the removed mesa.fs.mount() may still
@@ -220,25 +225,20 @@ export class Mesa {
           'mount() does not accept `authors`. Set them on the definition: mesa.fs({ layout, authors })'
         );
       }
-      const { layout, org, scopes, repos } = this.deriveLayoutTokenRequest(
-        definitionLayout,
-        'mesa.fs({ layout }).mount()'
-      );
+      const { layout, org, access } = this.deriveLayoutTokenRequest(definitionLayout, 'mesa.fs({ layout }).mount()');
       // Mint a single access token for the mount's whole lifetime. There is
       // no refresh and no credential hot-swap, so when the token expires the
       // mount expires with it.
-      const tokenInput = { scopes, repos, ttl_seconds: ttl };
-      const token = signPrivateKeyAccessToken({
-        credential: this.credential,
-        authors: authors!,
-        scopes: tokenInput.scopes,
-        repos: tokenInput.repos,
-        ttlSeconds: tokenInput.ttl_seconds,
+      const token = signAutomaticPrivateKeyAccessToken({
+        privateKey: this.credential,
+        authors,
+        access,
+        ttlSeconds: ttl,
       }).token;
       return this.createFs(org, options, token, layout);
     };
 
-    const defineLayout = ({ layout, ttl, authors: authorsInput }: RuntimeFsLayoutOptions): FsLayoutDefinition => {
+    const defineLayout = ({ layout, ttl, authors: authorsInput }: RuntimeFsLayoutOptions): FilesystemDefinition => {
       if (layout === undefined) {
         // Catches untyped callers passing a bare path map instead of options.
         throw new InvalidOptionsError("mesa.fs() requires a 'layout'");
@@ -282,14 +282,14 @@ export class Mesa {
   /**
    * Derive the least-privilege token request for a layout: its repositories
    * collected from every declaration and scoped by name (signed offline, no
-   * repository lookup), plus the narrowest scopes the declared modes allow.
+   * repository lookup), plus the narrowest access each declared mode allows.
    * Shared by the definition's `mount()` and `token()` so the derivation
    * exists exactly once.
    */
   private deriveLayoutTokenRequest(
     layout: Layout,
     caller: string
-  ): { layout: Layout; org: string; scopes: string[]; repos: string[] } {
+  ): { layout: Layout; org: string; access: Record<string, 'read-repo' | 'write-repo'> } {
     // The layout carries no organization of its own; the client's
     // organization scopes the token.
     const org = this.org.slug;
@@ -313,9 +313,19 @@ export class Mesa {
     // layout naming a nonexistent repository still derives a request and
     // fails at mount.
     MesaFileSystem.validateLayout(layout.toString());
-    const repos = [...new Set(declarations.map((declaration) => `${org}/${declaration.name}`))];
-    const scopes = declarations.some((declaration) => declaration.mode === 'rw') ? [...DEFAULT_TOKEN_SCOPES] : ['read'];
-    return { layout, org, scopes, repos };
+    // Repository names are user-controlled. A null prototype keeps a valid
+    // repository named `__proto__` from invoking Object's legacy setter.
+    const access = Object.create(null) as Record<string, 'read-repo' | 'write-repo'>;
+    for (const declaration of declarations) {
+      if (declaration.name === '*') {
+        throw new InvalidOptionsError(`${caller} requires exact repository names`);
+      }
+      const level = declaration.mode === 'rw' ? 'write-repo' : 'read-repo';
+      if (level === 'write-repo' || access[declaration.name] === undefined) {
+        access[declaration.name] = level;
+      }
+    }
+    return { layout, org, access };
   }
 
   async whoami(): Promise<WhoamiResponse> {
@@ -334,32 +344,5 @@ export class Mesa {
     const whoami = await this.restClient.whoami();
     this.cachedWhoAmI = whoami;
     return whoami;
-  }
-
-  /**
-   * Sign an access token locally from the credential this client holds.
-   *
-   * Internal: the only public way to mint an exportable token is
-   * `mesa.fs({ layout, ttl }).token()`, which routes here. Ordinary SDK calls
-   * do not need this — a private-key client already signs a fresh
-   * organization-scoped token for every request it makes.
-   */
-  private async signToken(input: TokensCreateInput | undefined): Promise<TokensCreateResponse> {
-    if (input?.authors === undefined) {
-      throw new InvalidOptionsError('Private-key tokens require a nonempty `authors` option.');
-    }
-    const signed = signPrivateKeyAccessToken({
-      credential: this.credential,
-      authors: input.authors,
-      scopes: input.scopes ?? [...DEFAULT_TOKEN_SCOPES],
-      ttlSeconds: input.ttl_seconds,
-      ...toSignerRepositoryRestriction(input),
-    });
-    return {
-      token: signed.token,
-      expires_at: signed.expiresAt,
-      scopes: signed.scopes,
-      ...toApiRepositoryRestriction(signed),
-    };
   }
 }

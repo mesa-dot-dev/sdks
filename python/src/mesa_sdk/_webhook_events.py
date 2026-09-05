@@ -76,11 +76,19 @@ class _Author(_WebhookModel):
     date: str | None = None
 
 
+class _CommitIdentity(_WebhookModel):
+    name: str
+    email: str | None
+
+
 class _ChangeInfo(_WebhookModel):
     id: str
     current_commit_oid: str
     message: str
-    author: _Author
+    authors: list[_CommitIdentity]
+    authored_at: str
+    # The raw payload also carries a deprecated singular ``author``; the model
+    # omits it so handlers only see ``authors`` and ``authored_at``.
     committer: _Author
     parents: list[str]
     created_at: str

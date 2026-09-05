@@ -36,6 +36,11 @@ SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60  # 15 minutes
 SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60  # 4 hours
 #: Maximum ordered commit authors accepted by the signing-key verifier.
 MAX_SIGNING_KEY_AUTHORS = 100
+#: Maximum repository grants accepted by the signing-key verifier.
+MAX_SIGNING_KEY_ACCESS_ENTRIES = 250
+
+SigningKeyAccessLevel: TypeAlias = Literal["read-repo", "write-repo"]
+SigningKeyAccess: TypeAlias = Mapping[str, SigningKeyAccessLevel]
 
 _MESA_PRIVATE_KEY_BODY_PATTERN = re.compile(
     r"^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)_([A-Za-z0-9_-]+)$"
@@ -47,7 +52,7 @@ _PEM_PRIVATE_KEY_PATTERN = re.compile(
 
 
 class NormalizedSigningKeyAuthor(NamedTuple):
-    """One validated author. As a tuple it serializes to the claim's [name, email] pair."""
+    """One validated author ready for the token's object-shaped claim."""
 
     name: str
     email: str | None
@@ -79,14 +84,15 @@ class PrivateKeyCredential:
 
 @dataclass(frozen=True)
 class SignedAccessToken:
-    """A locally signed access token and its effective claims."""
+    """A locally signed access token."""
 
     token: str
     expires_at: datetime
-    scopes: list[str]
-    repos: list[str] | None
-    repo_ids: list[str] | None
     jti: str
+
+
+_REPOSITORY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_RESERVED_REPOSITORY_NAMES = {"repo", "repos", "api-key", "api-keys"}
 
 
 def _base64url_encode(value: bytes) -> str:
@@ -145,7 +151,9 @@ def parse_private_key(private_key: str) -> PrivateKeyCredential:
         key_bytes = _base64url_decode(encoded_key)
         parsed_key = serialization.load_der_private_key(key_bytes, password=None)
     except (TypeError, UnsupportedAlgorithm, ValueError):
-        raise InvalidOptionsError("The private key is not a valid Ed25519 key.") from None
+        raise InvalidOptionsError(
+            "The private key is not a valid Ed25519 key."
+        ) from None
 
     if not isinstance(parsed_key, Ed25519PrivateKey):
         raise InvalidOptionsError("The private key must use Ed25519.")
@@ -208,6 +216,11 @@ def normalize_signing_key_authors(
                 f"Invalid authors.{index}.name: Author names must not contain "
                 "angle brackets or newlines."
             )
+        if looks_like_private_key(normalized_name):
+            raise InvalidOptionsError(
+                f"Invalid authors.{index}.name: Author names must not contain "
+                "Mesa private keys."
+            )
 
         email = author.get("email")
         if email is not None and not isinstance(email, str):
@@ -220,83 +233,76 @@ def normalize_signing_key_authors(
                 f"Invalid authors.{index}.email: Author emails must not contain "
                 "angle brackets or newlines."
             )
-        normalized.append(
-            NormalizedSigningKeyAuthor(normalized_name, normalized_email)
-        )
+        if normalized_email is not None and looks_like_private_key(normalized_email):
+            raise InvalidOptionsError(
+                f"Invalid authors.{index}.email: Author emails must not contain "
+                "Mesa private keys."
+            )
+        normalized.append(NormalizedSigningKeyAuthor(normalized_name, normalized_email))
 
     return tuple(normalized)
 
 
-def _normalize_signing_key_scopes(scopes: Sequence[str]) -> list[str]:
-    if isinstance(scopes, (str, bytes)) or not scopes:
-        raise InvalidOptionsError("Invalid scopes: at least one scope is required.")
-
-    normalized: list[str] = []
-    for index, scope in enumerate(scopes):
-        if scope not in ("read", "write", "admin"):
-            raise InvalidOptionsError(
-                f"Invalid scopes.{index}: expected `read`, `write`, or `admin`."
-            )
-        if scope not in normalized:
-            normalized.append(scope)
-    return normalized
-
-
-def _validate_signing_key_restrictions(
-    repos: Sequence[str] | None,
-    repo_ids: Sequence[str] | None,
-) -> tuple[list[str] | None, list[str] | None]:
-    if repos is not None and repo_ids is not None:
+def normalize_signing_key_access(
+    access: SigningKeyAccess,
+) -> dict[str, SigningKeyAccessLevel]:
+    """Validate and normalize repository rules with write precedence."""
+    if not isinstance(access, Mapping) or not access:
         raise InvalidOptionsError(
-            "Token repos and repo_ids restrictions are mutually exclusive"
+            "Invalid access: at least one repository is required."
+        )
+    if len(access) > MAX_SIGNING_KEY_ACCESS_ENTRIES:
+        raise InvalidOptionsError(
+            "Invalid access: at most "
+            f"{MAX_SIGNING_KEY_ACCESS_ENTRIES} repositories are allowed."
         )
 
-    if isinstance(repos, (str, bytes)):
-        raise InvalidOptionsError("Invalid repos: expected a list of repository names.")
-    if isinstance(repo_ids, (str, bytes)):
-        raise InvalidOptionsError("Invalid repo_ids: expected a list of repository IDs.")
-
-    normalized_repos = list(repos) if repos is not None else None
-    normalized_repo_ids = list(repo_ids) if repo_ids is not None else None
-    if normalized_repos is not None:
-        for index, repo in enumerate(normalized_repos):
-            if not isinstance(repo, str) or not repo:
-                raise InvalidOptionsError(
-                    f"Invalid repos.{index}: Token repos must not be empty."
-                )
-            if looks_like_private_key(repo):
-                raise InvalidOptionsError(
-                    f"Invalid repos.{index}: Token repos must not contain Mesa private keys."
-                )
-    if normalized_repo_ids is not None:
-        if len(normalized_repo_ids) > 250:
+    repos: dict[str, tuple[str, SigningKeyAccessLevel]] = {}
+    for repo, level in access.items():
+        if not isinstance(repo, str):
             raise InvalidOptionsError(
-                "Invalid repo_ids: Token repo_ids may contain at most 250 IDs."
+                "Invalid access: repository names must be strings."
             )
-        for index, repo_id in enumerate(normalized_repo_ids):
-            if not isinstance(repo_id, str) or not repo_id:
-                raise InvalidOptionsError(
-                    f"Invalid repo_ids.{index}: Token repo IDs must not be empty."
-                )
-            if looks_like_private_key(repo_id):
-                raise InvalidOptionsError(
-                    f"Invalid repo_ids.{index}: Token repo IDs must not contain Mesa private keys."
-                )
-    return normalized_repos, normalized_repo_ids
+        if looks_like_private_key(repo):
+            raise InvalidOptionsError(
+                "Invalid access: repository names must not contain Mesa private keys."
+            )
+        lower_repo = repo.lower()
+        if (
+            _REPOSITORY_NAME_PATTERN.fullmatch(repo) is None
+            or repo in (".", "..")
+            or lower_repo.endswith(".git")
+            or lower_repo in _RESERVED_REPOSITORY_NAMES
+        ):
+            raise InvalidOptionsError(
+                "Invalid access: expected valid bare repository names."
+            )
+        if level not in ("read-repo", "write-repo"):
+            raise InvalidOptionsError(
+                "Invalid access: expected `read-repo` or `write-repo`."
+            )
+        existing = repos.get(lower_repo)
+        if existing is None or level == "write-repo":
+            repos[lower_repo] = (existing[0] if existing else repo, level)
+
+    return {repo: level for repo, level in repos.values()}
 
 
-def sign_private_key_access_token(
+def sign_automatic_private_key_access_token(
     *,
     private_key: PrivateKeyCredential,
-    authors: NormalizedSigningKeyAuthors | None,
-    scopes: Sequence[str],
-    repos: Sequence[str] | None = None,
-    repo_ids: Sequence[str] | None = None,
+    authors: NormalizedSigningKeyAuthors | None = None,
+    access: SigningKeyAccess | None = None,
+    admin: Literal[True] | None = None,
     ttl_seconds: int | None = None,
-    _iat: int | None = None,
-    _jti: str | None = None,
 ) -> SignedAccessToken:
-    """Sign an Ed25519 access token with normalized optional authors."""
+    """Sign an internal request or MesaFS credential."""
+    if not (
+        (admin is True and access is None) or (admin is None and access is not None)
+    ):
+        raise InvalidOptionsError(
+            "Tokens require exactly one of `admin=True` or `access`."
+        )
     ttl = (
         ttl_seconds
         if ttl_seconds is not None
@@ -312,13 +318,12 @@ def sign_private_key_access_token(
             f"{SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS} seconds"
         )
 
-    normalized_scopes = _normalize_signing_key_scopes(scopes)
-    normalized_repos, normalized_repo_ids = _validate_signing_key_restrictions(
-        repos, repo_ids
+    normalized_access = (
+        normalize_signing_key_access(access) if access is not None else None
     )
-    iat = _iat if _iat is not None else int(time.time())
+    iat = int(time.time())
     exp = iat + ttl
-    jti = _jti if _jti is not None else str(uuid.uuid4())
+    jti = str(uuid.uuid4())
     header = {
         "alg": "EdDSA",
         "typ": ACCESS_TOKEN_TYP,
@@ -330,14 +335,13 @@ def sign_private_key_access_token(
         **(
             {}
             if authors is None
-            else {"author": [list(author) for author in authors]}
+            else {
+                "authors": [
+                    {"name": author.name, "email": author.email} for author in authors
+                ]
+            }
         ),
-        "scopes": normalized_scopes,
-        **(
-            {"repo_ids": normalized_repo_ids}
-            if normalized_repo_ids is not None
-            else {"repos": normalized_repos}
-        ),
+        **({"admin": True} if admin is True else {"access": normalized_access}),
         "iat": iat,
         "exp": exp,
         "jti": jti,
@@ -348,8 +352,5 @@ def sign_private_key_access_token(
     return SignedAccessToken(
         token=f"{signing_input}.{signature}",
         expires_at=datetime.fromtimestamp(exp, tz=timezone.utc),
-        scopes=normalized_scopes,
-        repos=normalized_repos if normalized_repo_ids is None else None,
-        repo_ids=normalized_repo_ids,
         jti=jti,
     )

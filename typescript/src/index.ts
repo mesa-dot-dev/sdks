@@ -9,14 +9,7 @@ export type {
   SecureFetch,
 } from 'just-bash';
 export { Bash } from 'just-bash';
-export {
-  type RepoTagFilter,
-  type RepoTagValueFilter,
-  type TokensCreateAuthor,
-  type TokensCreateInput,
-  type TokensCreatePrivateKeyInput,
-  type TokensCreateResponse,
-} from './api/index.js';
+export { type RepoTagFilter, type RepoTagValueFilter } from './api/index.js';
 export { VIRTUAL_ROOT_CHANGE_ID } from './constants.js';
 export {
   type BookmarkCreateArgs,
@@ -55,7 +48,14 @@ export {
   type WatchEventHandler,
 } from './fs/index.js';
 export * from './lib/errors.js';
-export { type FsLayoutDefinition, type FsMountRuntimeOptions, Mesa, type MesaOptions } from './mesa.js';
+export {
+  type AccessToken,
+  type FilesystemDefinition,
+  type FsLayoutAuthor,
+  type FsMountRuntimeOptions,
+  Mesa,
+  type MesaOptions,
+} from './mesa.js';
 export {
   type BookmarkCreatedPayload,
   BookmarkCreatedPayloadSchema,

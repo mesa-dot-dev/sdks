@@ -40,11 +40,19 @@ const CommitAuthorSchema = z.object({
   date: z.string().optional(),
 });
 
+const CommitIdentitySchema = z.object({
+  name: z.string(),
+  email: z.string().nullable(),
+});
+
 const ChangeInfoSchema = z.object({
   id: z.string(),
   current_commit_oid: z.string(),
   message: z.string(),
-  author: CommitAuthorSchema,
+  authors: z.array(CommitIdentitySchema),
+  authored_at: z.string(),
+  // The raw payload also carries a deprecated singular `author`; it is
+  // dropped here so handlers only ever see `authors` and `authored_at`.
   committer: CommitAuthorSchema,
   parents: z.array(z.string()),
   created_at: z.string(),

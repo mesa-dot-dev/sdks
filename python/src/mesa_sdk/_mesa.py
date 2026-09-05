@@ -9,10 +9,11 @@ from mesa_rest.api.org import whoami as whoami_api
 from mesa_sdk._signing_key import (
     NormalizedSigningKeyAuthors,
     PrivateKeyCredential,
+    SignedAccessToken,
+    SigningKeyAccess,
     looks_like_private_key,
-    normalize_signing_key_authors,
     parse_private_key,
-    sign_private_key_access_token,
+    sign_automatic_private_key_access_token,
 )
 from mesa_sdk._client import BearerAuth, create_client, unwrap
 from mesa_sdk._fs import FsNamespace
@@ -24,12 +25,14 @@ from mesa_sdk._resources import (
     OrgResource,
     Repos,
     RequestAttribution,
-    TokenCreateResult,
     WebhookTargets,
 )
 from mesa_sdk._webhooks import Webhooks
-from mesa_sdk.errors import InvalidApiUrlError, InvalidOptionsError, MissingCredentialError
-from mesa_sdk.types import SigningKeyAuthor
+from mesa_sdk.errors import (
+    InvalidApiUrlError,
+    InvalidOptionsError,
+    MissingCredentialError,
+)
 
 if TYPE_CHECKING:
     from mesa_rest.client import AuthenticatedClient
@@ -37,12 +40,10 @@ if TYPE_CHECKING:
 
 DEFAULT_API_URL = "https://api.mesa.dev/v1"
 PRIVATE_KEY_ENV_VAR = "MESA_PRIVATE_KEY"
-#: Default scopes for layout-scoped and MesaFS mount tokens.
-DEFAULT_TOKEN_SCOPES = ["read", "write"]
 
 
 def _resolve_private_key(private_key: str | None) -> PrivateKeyCredential:
-    """Resolve an explicit private key or the environment fallback."""
+    """Resolve an explicit or environment private key."""
     if private_key is not None:
         return parse_private_key(private_key)
     environment_private_key = os.environ.get(PRIVATE_KEY_ENV_VAR, "").strip()
@@ -50,7 +51,8 @@ def _resolve_private_key(private_key: str | None) -> PrivateKeyCredential:
         return parse_private_key(environment_private_key)
 
     raise MissingCredentialError(
-        f"Missing credential. Pass a private key or set `{PRIVATE_KEY_ENV_VAR}`."
+        "Missing credential. Pass `private_key` or set "
+        f"`{PRIVATE_KEY_ENV_VAR}` in your environment."
     )
 
 
@@ -111,8 +113,8 @@ class Mesa:
         :raises MissingCredentialError: If no credential is provided directly
             or through ``MESA_PRIVATE_KEY``.
         """
-        credential = _resolve_private_key(private_key)
-        self._credential = credential
+        private_key_credential = _resolve_private_key(private_key)
+        self._credential = private_key_credential
 
         self.api_url = _normalize_url(api_url)
         if user_agent and looks_like_private_key(user_agent):
@@ -121,20 +123,23 @@ class Mesa:
             )
         self._cached_whoami = None
 
-        credential_org = credential.org
+        credential_org = private_key_credential.org
         bearer_auth = BearerAuth(
-            lambda: sign_private_key_access_token(
-                private_key=credential,
-                authors=None,
-                scopes=["admin"],
-            ).token
+            lambda: (
+                sign_automatic_private_key_access_token(
+                    private_key=private_key_credential,
+                    admin=True,
+                ).token
+            )
         )
         request_attribution = RequestAttribution(
-            sign=lambda authors: sign_private_key_access_token(
-                private_key=credential,
-                authors=authors,
-                scopes=["admin"],
-            ).token,
+            sign=lambda authors: (
+                sign_automatic_private_key_access_token(
+                    private_key=private_key_credential,
+                    authors=authors,
+                    admin=True,
+                ).token
+            ),
             auth=bearer_auth,
         )
 
@@ -145,9 +150,7 @@ class Mesa:
         )
 
         self.repos = Repos(self._client, credential_org)
-        self.bookmarks = Bookmarks(
-            self._client, credential_org, request_attribution
-        )
+        self.bookmarks = Bookmarks(self._client, credential_org, request_attribution)
         self.changes = Changes(self._client, credential_org, request_attribution)
         self.content = Content(self._client, credential_org)
         self.diffs = Diffs(self._client, credential_org)
@@ -155,68 +158,40 @@ class Mesa:
         self.webhook_targets = WebhookTargets(self._client, credential_org)
         self.webhooks = Webhooks(webhook_secret)
 
-    async def _sign_token(
-        self,
-        *,
-        scopes: list[str] | None,
-        repos: list[str] | None,
-        repo_ids: list[str] | None,
-        authors: list[SigningKeyAuthor] | None,
-        ttl_seconds: int | None,
-    ) -> TokenCreateResult:
-        """Sign an access token locally from this client's root credential.
-
-        Internal: the only public way to mint an exportable token is
-        ``mesa.fs(layout=..., ttl=...).token()``, which routes here. Ordinary
-        SDK calls do not need it -- a private-key client already signs a fresh
-        organization-scoped token for every request it makes.
-        """
-        if authors is None:
-            raise InvalidOptionsError(
-                "Minted tokens require a nonempty `authors` option."
-            )
-        signed_private_key = sign_private_key_access_token(
-            private_key=self._credential,
-            authors=normalize_signing_key_authors(authors),
-            scopes=scopes if scopes is not None else list(DEFAULT_TOKEN_SCOPES),
-            repos=repos,
-            repo_ids=repo_ids,
-            ttl_seconds=ttl_seconds,
-        )
-        return TokenCreateResult(
-            token=signed_private_key.token,
-            expires_at=signed_private_key.expires_at,
-            scopes=signed_private_key.scopes,
-            repos=signed_private_key.repos,
-            repo_ids=signed_private_key.repo_ids,
-        )
-
     async def _create_mount_token(
         self,
         *,
-        scopes: list[str],
-        repos: list[str],
-        authors: NormalizedSigningKeyAuthors | None,
+        access: SigningKeyAccess,
+        authors: NormalizedSigningKeyAuthors,
         ttl_seconds: int | None,
     ) -> str:
         """Return the bearer credential for a filesystem mount."""
-        if authors is None:
-            raise InvalidOptionsError(
-                "Private-key mounts require a nonempty `authors` option."
-            )
-        return sign_private_key_access_token(
-            private_key=self._credential,
+        return self._sign_layout_token(
+            access=access,
             authors=authors,
-            scopes=scopes,
-            repos=repos,
             ttl_seconds=ttl_seconds,
         ).token
+
+    def _sign_layout_token(
+        self,
+        *,
+        access: SigningKeyAccess,
+        authors: NormalizedSigningKeyAuthors,
+        ttl_seconds: int | None,
+    ) -> SignedAccessToken:
+        """Sign a private-key filesystem layout credential."""
+        return sign_automatic_private_key_access_token(
+            private_key=self._credential,
+            authors=authors,
+            access=access,
+            ttl_seconds=ttl_seconds,
+        )
 
     @property
     def fs(self) -> FsNamespace:
         """Filesystem namespace for mounting repos as a virtual filesystem.
 
-        Use :meth:`mesa.fs(layout=...).mount() <mesa_sdk.LayoutDefinition.mount>`
+        Use :meth:`mesa.fs(layout=...).mount() <mesa_sdk.FilesystemDefinition.mount>`
         to open a :class:`MesaFileSystem`.
         """
         if not hasattr(self, "_fs"):

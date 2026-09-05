@@ -107,7 +107,9 @@ class Webhooks:
 
         timestamp, signature = _parse_signature_header(signature_header)
         if abs(int(time.time()) - timestamp) > WEBHOOK_TOLERANCE_SECONDS:
-            raise MesaWebhookVerificationError("Webhook timestamp outside tolerance window")
+            raise MesaWebhookVerificationError(
+                "Webhook timestamp outside tolerance window"
+            )
 
         expected = sign(self._secret, timestamp, body)
         # hmac.compare_digest performs a timing-safe comparison for equal-type

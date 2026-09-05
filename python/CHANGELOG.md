@@ -10,8 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `authors` and `authored_at` to `change.created` and `change.evolved` webhook events; `email` is `null` when none was supplied
+- Add `authors` and `authored_at` to change results
+
 ### Removed
 
+- **Breaking:** Remove the deprecated singular `author` from change results and from normalized `change.created` / `change.evolved` webhook events; read `authors` and `authored_at` instead. Raw `mesa_rest` responses keep `author` for API compatibility
+- **Breaking:** Remove the undocumented `block_size_bytes` keyword from `DiskCacheConfig`. Disk cache block size is an internal tuning knob and was never declared in the type stubs
 - **Breaking:** Remove `MesaFileSystem.connect()` from the public surface; open a filesystem with `mesa.fs(layout=..., authors=...).mount()`, which mints the mount's token with scopes derived from the layout. `MesaFileSystem` remains exported for annotating the value `mount()` yields
 - **Breaking:** Remove legacy comma-separated repository tag filters from `mesa.repos.list()`; pass a structured filter dictionary instead
 - **Breaking:** Remove `auth` and access-token construction from `Mesa`; construct with `Mesa()` or `Mesa(private_key=...)` plus the usual keyword options, and pass scoped tokens to the CLI, mounted MesaFS environments, or direct REST calls instead

@@ -8,6 +8,7 @@ import json
 import logging
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     AsyncIterator,
@@ -23,7 +24,7 @@ from typing import (
 )
 
 from mesa_sdk._signing_key import (
-    looks_like_private_key,
+    NormalizedSigningKeyAuthors,
     normalize_signing_key_authors,
 )
 from mesa_sdk._native import (
@@ -32,11 +33,10 @@ from mesa_sdk._native import (
     CheckpointResult,
     DiskCacheConfig,
     FsStat,
-    MesaConfig,
+    _MesaConfig,  # pyright: ignore[reportPrivateUsage]
     _NativeMesaFileSystem,  # pyright: ignore[reportPrivateUsage]
     validate_layout,
 )
-from mesa_sdk._resources import TokenCreateResult
 from mesa_sdk.errors import InvalidOptionsError
 from mesa_sdk.types import SigningKeyAuthor
 
@@ -44,11 +44,12 @@ if TYPE_CHECKING:
     from mesa_sdk._mesa import Mesa
 
 __all__ = [
+    "AccessToken",
     "BookmarksOps",
     "ChangesOps",
+    "FilesystemDefinition",
     "FsNamespace",
     "Layout",
-    "LayoutDefinition",
     "LayoutSpec",
     "MesaFileSystem",
     "MesaFileSystemSubscription",
@@ -65,6 +66,16 @@ _logger = logging.getLogger(__name__)
 # Layout JSON uses lowercase string modes; the native :class:`~mesa_sdk.MountMode`
 # enum is for :class:`~mesa_sdk.RepoConfig`.
 _LayoutMountMode: TypeAlias = Literal["ro", "rw"]
+
+
+@dataclass(frozen=True)
+class AccessToken:
+    """A short-lived credential minted for one filesystem layout."""
+
+    token: str
+    """The compact JWS access token string."""
+    expires_at: datetime
+    """Exact expiry, as a timezone-aware UTC ``datetime``."""
 
 
 class RepoName(TypedDict):
@@ -117,7 +128,9 @@ class Layout:
 
     def __str__(self) -> str:
         """Serialize the layout as deterministic, pretty-printed JSON."""
-        return json.dumps(self.spec, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        return (
+            json.dumps(self.spec, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
 
     def to_json(self) -> LayoutSpec:
         """Return the canonical :class:`LayoutSpec`."""
@@ -135,8 +148,7 @@ def _reject_unknown_keys(
     unknown = sorted(set(mapping) - allowed)
     if unknown:
         raise ValueError(
-            f"repo(): {where} has unknown key(s) {unknown}; "
-            f"expected {sorted(allowed)}"
+            f"repo(): {where} has unknown key(s) {unknown}; expected {sorted(allowed)}"
         )
 
 
@@ -213,7 +225,9 @@ def repo(
         at_bookmark = at.get("bookmark")
         at_change_id = at.get("change_id")
         if at_bookmark is not None and at_change_id is not None:
-            raise ValueError("repo(): at.bookmark and at.change_id are mutually exclusive")
+            raise ValueError(
+                "repo(): at.bookmark and at.change_id are mutually exclusive"
+            )
         if at_bookmark is None and at_change_id is None:
             raise ValueError("repo(): at requires a bookmark or change_id")
     if branched_from is not None:
@@ -369,7 +383,9 @@ class ChangesOps:
         """Return the currently active change for ``repo``."""
         return await self._fs.current_change(repo)
 
-    async def checkpoint(self, repo: str, message: str | None = None) -> CheckpointResult:
+    async def checkpoint(
+        self, repo: str, message: str | None = None
+    ) -> CheckpointResult:
         """Flush pending writes, optionally describe the current change, create
         a new descendant change, and advance bookmarks onto that descendant.
 
@@ -424,7 +440,7 @@ class BookmarksOps:
 class MesaFileSystem:
     """Mesa virtual filesystem.
 
-    Construct via :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`.
+    Construct via :meth:`mesa.fs(layout=...).mount() <FilesystemDefinition.mount>`.
 
     Filesystem errors raise Python's built-in exceptions
     (:exc:`FileNotFoundError`, :exc:`IsADirectoryError`,
@@ -446,28 +462,14 @@ class MesaFileSystem:
     async def _close(self) -> None:
         """Flush pending writes before mount teardown.
 
-        This is intentionally private; :meth:`LayoutDefinition.mount`
+        This is intentionally private; :meth:`FilesystemDefinition.mount`
         owns the lifecycle for user-facing mounts.
         """
         await self._native._close()
 
     @classmethod
-    async def _connect(cls, config: MesaConfig) -> "MesaFileSystem":
-        """Open a filesystem from an already-minted access token.
-
-        Internal. Callers go through
-        :meth:`mesa.fs(layout=...).mount() <LayoutDefinition.mount>`, which
-        derives the token's scopes from the layout and mints it for the mount.
-        This path instead takes a token minted elsewhere, so its scopes and
-        TTL are the caller's to get right. Neither path can refresh: when the
-        token expires the mount fails closed, and resuming means signing a new
-        token and opening a new filesystem.
-        """
-        if looks_like_private_key(config.credential):
-            raise InvalidOptionsError(
-                "MesaConfig.credential must contain a bearer credential, not a private key."
-            )
-        return cls(await _NativeMesaFileSystem.connect(config), config.org)
+    async def _connect(cls, config: _MesaConfig, org: str) -> "MesaFileSystem":
+        return cls(await _NativeMesaFileSystem.connect(config), org)
 
     # -- Byte I/O --
     async def read(self, path: str) -> bytes:
@@ -635,7 +637,7 @@ class MesaFileSystem:
         )
 
 
-class LayoutDefinition:
+class FilesystemDefinition:
     """A layout bundled with its scoped operations: ``mesa.fs(layout=...)``.
 
     Every member is a pure delegation to the existing ``mesa.fs`` helpers;
@@ -663,7 +665,7 @@ class LayoutDefinition:
         fs: "FsNamespace",
         layout: Layout,
         ttl: int | None,
-        authors: list[SigningKeyAuthor] | None = None,
+        authors: NormalizedSigningKeyAuthors,
     ) -> None:
         self._fs = fs
         self._layout = layout
@@ -684,9 +686,11 @@ class LayoutDefinition:
         Accepts the non-token mount options; the mount's token lifetime is
         the definition's ``ttl``.
         """
-        return self._fs._mount_layout(self._layout, self._ttl, disk_cache, self._authors)
+        return self._fs._mount_layout(
+            self._layout, self._ttl, disk_cache, self._authors
+        )
 
-    async def token(self) -> TokenCreateResult:
+    async def token(self) -> AccessToken:
         """Mint the layout-scoped, least-privilege access token with the definition's ``ttl``."""
         return await self._fs._mint_layout_token(self._layout, self._ttl, self._authors)
 
@@ -701,42 +705,39 @@ class FsNamespace:
         self,
         layout: Layout,
         ttl: int | None,
-        authors: list[SigningKeyAuthor] | None = None,
-    ) -> TokenCreateResult:
+        authors: NormalizedSigningKeyAuthors,
+    ) -> AccessToken:
         """Sign the least-privilege access token for a definition's layout.
 
         Applies the exact derivation the layout mount uses: repositories
-        collected from every declaration and scoped by name, read-only
-        scopes when every mode is ``"ro"``, read/write otherwise. Signing is
-        entirely local.
+        collected from every declaration and scoped by name, with
+        ``read-repo`` for ``"ro"`` modes and ``write-repo`` otherwise.
+        Signing is entirely local.
 
-        Authors and ``ttl`` are validated against the client's credential at
-        definition time, in :meth:`__call__`.
+        Authors are validated when the definition is created. ``ttl`` is
+        validated while minting the token.
         """
         # Run the core structural validator before minting so a malformed
         # layout fails here with the mount's own error. Repository names
         # resolve only at mount time.
         validate_layout(str(layout))
-        _, _, scopes, repo_names = await self._layout_token_request(
+        _, _, access = await self._layout_token_request(
             layout, "mesa.fs(layout=...).token()"
         )
-        # The layout definition is the only public mint path; it signs through
-        # the client's private signer.
-        return await self._mesa._sign_token(
-            scopes=scopes,
-            repos=repo_names,
-            repo_ids=None,
+        signed = self._mesa._sign_layout_token(
             authors=authors,
+            access=access,
             ttl_seconds=ttl,
         )
+        return AccessToken(token=signed.token, expires_at=signed.expires_at)
 
     def __call__(
         self,
         *,
         layout: Mapping[str, Repo | Sequence[Repo]],
-        authors: list[SigningKeyAuthor] | None = None,
+        authors: list[SigningKeyAuthor],
         ttl: int | None = None,
-    ) -> LayoutDefinition:
+    ) -> FilesystemDefinition:
         """Bundle a layout with its mount and token operations.
 
         The raw path mapping builds eagerly, so an invalid mapping fails
@@ -744,22 +745,16 @@ class FsNamespace:
         mount a layout or mint its token: ``layout()`` serializes for
         ``mesa mount --layout``, ``mount()`` opens the in-process
         filesystem, and ``token()`` mints the layout-scoped credential.
-        ``ttl`` is the lifetime of every token the definition mints. The
-        call is synchronous, so the one-shot form needs no extra await:
-        ``async with mesa.fs(layout={...}).mount() as fs``.
+        ``ttl`` is the lifetime of every token the definition mints and is
+        validated when a token is minted. The call is synchronous, so the
+        one-shot form needs no extra await:
+        ``async with mesa.fs(layout={...}, authors=[...]).mount() as fs``.
         """
-        if authors is not None:
-            normalize_signing_key_authors(authors)
-        else:
-            raise InvalidOptionsError(
-                "Private-key layout definitions require a nonempty `authors` option."
-            )
+        normalized_authors = normalize_signing_key_authors(authors)
         for path in layout:
             if not path.startswith("/"):
-                raise ValueError(
-                    f"mesa.fs(): top-level path '{path}' must be absolute"
-                )
-        return LayoutDefinition(self, Layout(layout), ttl, authors)
+                raise ValueError(f"mesa.fs(): top-level path '{path}' must be absolute")
+        return FilesystemDefinition(self, Layout(layout), ttl, normalized_authors)
 
     @asynccontextmanager
     async def _mount_layout(
@@ -767,31 +762,30 @@ class FsNamespace:
         layout: Layout,
         ttl: int | None,
         disk_cache: DiskCacheConfig | None,
-        authors: list[SigningKeyAuthor] | None = None,
+        authors: NormalizedSigningKeyAuthors,
     ) -> AsyncIterator[MesaFileSystem]:
         """Mount a definition's layout as the complete namespace.
 
         Presents repositories at their declared workspace paths, replacing
         the canonical browse tree, with a token scoped to the layout's
-        repositories by name. Authors and ``ttl`` are validated against the
-        client's credential at definition time, in :meth:`__call__`.
+        repositories by name. Authors are validated when the definition is
+        created; ``ttl`` is validated while minting the mount token.
         """
-        normalized_authors = (
-            normalize_signing_key_authors(authors) if authors is not None else None
-        )
-        layout, org, scopes, repo_names = await self._layout_token_request(
+        # Keep mount() and token() aligned: malformed layouts fail before
+        # signing a credential or attempting native filesystem construction.
+        validate_layout(str(layout))
+        layout, org, access = await self._layout_token_request(
             layout, "mesa.fs(layout=...).mount()"
         )
 
         # Names are signed offline; no repository lookup is needed to mint the token.
         credential = await self._mesa._create_mount_token(
-            scopes=scopes,
-            repos=repo_names,
-            authors=normalized_authors,
+            access=access,
+            authors=authors,
             ttl_seconds=ttl,
         )
 
-        config = MesaConfig(
+        config = _MesaConfig(
             org=org,
             credential=credential,
             repos=[],
@@ -799,21 +793,23 @@ class FsNamespace:
             api_base_url=self._mesa.api_url,
             disk_cache=disk_cache,
         )
-        async with self._connect_and_flush(config) as fs:
+        async with self._connect_and_flush(config, org) as fs:
             yield fs
 
     async def _layout_token_request(
         self,
         layout: Layout,
         caller: str,
-    ) -> tuple[Layout, str, list[str], list[str]]:
+    ) -> tuple[
+        Layout,
+        str,
+        dict[str, Literal["read-repo", "write-repo"]],
+    ]:
         """Derive the least-privilege token request for ``layout``.
 
-        Returns ``(layout, org, scopes, repo_names)``: the prepared layout, the
-        client organization, the narrowest scopes the declared modes allow, and
-        the layout's repositories as full ``org/repo`` names. Shared by
-        :meth:`_mount_layout` and :meth:`_mint_layout_token` so the derivation
-        exists exactly once.
+        Returns the prepared layout, client organization, and narrowest access
+        for each declared repository. Shared by :meth:`_mount_layout` and
+        :meth:`_mint_layout_token` so the derivation exists exactly once.
         """
         # The layout carries no organization of its own; the client's
         # organization scopes the token.
@@ -835,25 +831,25 @@ class FsNamespace:
             raise InvalidOptionsError(
                 f"{caller} requires at least one layout repository"
             )
-        repo_names = list(
-            dict.fromkeys(
-                f"{org}/{declaration['name']}" for declaration in declarations
+        access: dict[str, Literal["read-repo", "write-repo"]] = {}
+        for declaration in declarations:
+            if declaration["name"] == "*":
+                raise InvalidOptionsError(f"{caller} requires exact repository names")
+            level: Literal["read-repo", "write-repo"] = (
+                "write-repo" if declaration["mode"] == "rw" else "read-repo"
             )
-        )
-        scopes = (
-            ["read", "write"]
-            if any(declaration["mode"] == "rw" for declaration in declarations)
-            else ["read"]
-        )
-        return layout, org, scopes, repo_names
+            name = declaration["name"]
+            if level == "write-repo" or name not in access:
+                access[name] = level
+        return layout, org, access
 
     @asynccontextmanager
     async def _connect_and_flush(
-        self, config: MesaConfig
+        self, config: _MesaConfig, org: str
     ) -> AsyncIterator[MesaFileSystem]:
         fs: MesaFileSystem | None = None
         try:
-            fs = await MesaFileSystem._connect(config)
+            fs = await MesaFileSystem._connect(config, org)
             yield fs
         except BaseException:
             # The mount body raised. Still flush pending writes, but a flush

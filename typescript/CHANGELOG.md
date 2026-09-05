@@ -10,8 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `authors` and `authored_at` to `change.created` and `change.evolved` webhook events; `email` is `null` when none was supplied
+- Add `authors` and `authored_at` to change results
+
 ### Removed
 
+- **Breaking:** Remove the deprecated singular `author` from change results and from normalized `change.created` / `change.evolved` webhook events; read `authors` and `authored_at` instead. Raw `@mesadev/rest` responses keep `author` for API compatibility
 - **Breaking:** Remove `MesaFileSystem.create()` and stop exporting `MesaFileSystem` as a value; it remains exported as a type for annotating the result of `mesa.fs({ layout, authors }).mount()`, which is now the only way to open a filesystem. `MesaFileSystem.createAsync()` and `MesaFileSystem.validateLayout()` are no longer reachable from the package entry point
 - **Breaking:** Remove legacy comma-separated repository tag filters from `mesa.repos.list()`; pass a structured `RepoTagFilter` object instead
 - **Breaking:** Remove positional private-key, nested `auth`, and access-token construction from `Mesa`; construct with `new Mesa()` or `new Mesa({ privateKey, ...options })`, and pass scoped tokens to the CLI, mounted MesaFS environments, or direct REST calls instead

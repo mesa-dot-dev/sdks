@@ -54,16 +54,12 @@ class BearerAuth(httpx.Auth):
 
 
 @contextmanager
-def request_credential(
-    auth: BearerAuth | None, credential: str | None
-) -> Iterator[None]:
+def request_credential(auth: BearerAuth, credential: str | None) -> Iterator[None]:
     """Override one private-key request without mutating shared client state."""
     if credential is None:
         yield
         return
 
-    if auth is None:
-        raise RuntimeError("Request credential overrides require dynamic authentication")
     with auth.override(credential):
         yield
 

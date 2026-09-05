@@ -33,14 +33,13 @@ asyncio.run(main())
 
 Every mount has a **layout**: a map of absolute paths to `repo(...)`
 declarations. Call `mesa.fs(layout=..., authors=..., ttl=...)` to build a
-`LayoutDefinition`, then `.mount()` to open it.
+`FilesystemDefinition`, then `.mount()` to open it.
 
 `definition.mount()` is an async context manager. When you enter it, the SDK:
 
 1. Signs one short-lived, layout-scoped access token (JWT) locally from your
-   private key. The token's repo scope is encoded as full
-   `org/repo` names collected from the layout. Scopes are `["read"]` when every
-   declaration is `"ro"`, otherwise `["read", "write"]`.
+   private key. Each repository in the layout receives read only access for a
+   `"ro"` declaration or read and write for a `"rw"` declaration.
 2. Connects to the Mesa VCS backend and yields a `MesaFileSystem` whose
    namespace is exactly the layout paths.
 
@@ -62,8 +61,7 @@ async with mesa.fs(
 Paths inside the mount are whatever the layout declares — for example
 `/workspace/src/main.py`, not `/org/repo/...`.
 
-Private-key clients **require** `authors` on the definition. Access-token
-clients reject `authors`.
+Every definition **requires** `authors`.
 
 ### Token lifetime (`ttl`)
 
@@ -84,7 +82,7 @@ async with mesa.fs(
 `ttl` defaults to `900` (15 minutes) and is capped at `14_400` (4 hours). A
 value outside that range raises `InvalidOptionsError`.
 
-### Minting a layout token without mounting
+### Minting an access token without mounting
 
 ```python
 definition = mesa.fs(
@@ -93,8 +91,12 @@ definition = mesa.fs(
     ttl=3600,
 )
 token = (await definition.token()).token
-# Hand token + definition.layout() to a sandbox running `mesa mount --layout`
+# Hand token + definition.layout() to a sandbox running `mesa mount --layout`,
+# or use the token as a Bearer credential for direct REST requests.
 ```
+
+Access tokens from layout definitions are for the Mesa CLI, MesaFS, and direct REST requests. The
+Python SDK's `Mesa` constructor accepts only private keys.
 
 ## Reading files
 
@@ -581,13 +583,13 @@ asyncio.run(main())
 
 ## API reference
 
-### LayoutDefinition (`mesa.fs(...)`)
+### FilesystemDefinition (`mesa.fs(...)`)
 
 | Member | Signature | Returns |
 |---|---|---|
 | `layout` | `()` | `Layout` |
 | `mount` | `(*, disk_cache: DiskCacheConfig \| None = None)` | async context manager → `MesaFileSystem` |
-| `token` | `()` | `TokenCreateResult` |
+| `token` | `()` | `AccessToken` |
 
 ### `repo(...)`
 

@@ -1,7 +1,7 @@
 """Type stubs for :mod:`mesa_sdk`'s compiled types.
 
-Public types like :class:`MesaConfig`, :class:`Bash`, and :class:`ExecResult`
-are defined here and re-exported from :mod:`mesa_sdk`.
+Compiled types used by :mod:`mesa_sdk` are defined here. Public types such as
+:class:`Bash` and :class:`ExecResult` are re-exported from :mod:`mesa_sdk`.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ __all__ = [
     "DiskCacheConfig",
     "ExecResult",
     "FsStat",
-    "MesaConfig",
     "MountMode",
     "RepoConfig",
     "_NativeMesaFileSystemWatcher",
@@ -108,23 +107,8 @@ class DiskCacheConfig:
     ) -> DiskCacheConfig: ...
 
 @final
-class MesaConfig:
-    """Configuration for opening a :class:`MesaFileSystem`.
-
-    Most users obtain a config indirectly through
-    :meth:`mesa.fs(layout=...).mount() <mesa_sdk.LayoutDefinition.mount>`.
-    Construct this directly only when you manage the bearer credential's
-    lifecycle yourself.
-
-    :param org: The organization slug.
-    :param credential: Bearer access token with access to every repo in
-        ``repos``. Private keys are rejected.
-    :param repos: Per-repo configuration. Each entry pins a repo to a
-        bookmark or change.
-    :param layout: Serialized layout mounted as the complete namespace.
-    :param disk_cache: Optional on-disk cache placement.
-    :param api_base_url: Override the default API endpoint.
-    """
+class _MesaConfig:
+    """Internal filesystem configuration assembled by the mount flow."""
 
     org: str
     credential: str
@@ -142,7 +126,7 @@ class MesaConfig:
         layout: str,
         disk_cache: DiskCacheConfig | None = None,
         api_base_url: str | None = None,
-    ) -> MesaConfig: ...
+    ) -> _MesaConfig: ...
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -207,7 +191,7 @@ class ExecResult:
 @final
 class _NativeMesaFileSystem:
     @staticmethod
-    async def connect(config: MesaConfig) -> _NativeMesaFileSystem: ...
+    async def connect(config: _MesaConfig) -> _NativeMesaFileSystem: ...
 
     async def _close(self) -> None: ...
 

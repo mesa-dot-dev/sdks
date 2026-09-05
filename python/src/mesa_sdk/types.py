@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict, Union
+from typing import Any, Literal, TypedDict, Union
 
 from mesa_rest.types import UNSET, Unset
 
@@ -30,6 +30,63 @@ class Author:
     name: str
     email: str
     date: datetime.datetime | None = None
+
+
+@dataclass
+class CommitIdentity:
+    """One contributor in a change's ordered commit attribution."""
+
+    name: str
+    email: str | None
+
+
+@dataclass
+class CommitSignature:
+    """Committer identity and timestamp returned for a change."""
+
+    name: str
+    email: str
+    date: datetime.datetime | None
+
+
+@dataclass(kw_only=True)
+class Change:
+    """A Mesa change returned by the high-level SDK.
+
+    The REST API still returns a deprecated singular ``author`` so older
+    clients keep working; the SDK exposes only ``authors`` and ``authored_at``.
+    Fields the SDK does not model are kept in ``additional_properties``.
+    """
+
+    id: str
+    current_commit_oid: str
+    is_conflicted: bool
+    message: str
+    authors: list[CommitIdentity]
+    authored_at: datetime.datetime
+    committer: CommitSignature
+    parents: list[str]
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    additional_properties: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(kw_only=True)
+class ChangeDetails(Change):
+    """A Mesa change with its changed and conflicted paths."""
+
+    files: list[str]
+    conflicts: list[str]
+
+
+@dataclass(kw_only=True)
+class ChangesPage:
+    """One paginated page of Mesa changes."""
+
+    next_cursor: str | None
+    has_more: bool
+    changes: list[Change]
+    additional_properties: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

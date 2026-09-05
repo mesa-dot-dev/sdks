@@ -31,29 +31,34 @@ asyncio.run(main())
 
 ### Authentication
 
-A signing private key belongs in a process you trust. Give anything less trusted, such as a sandbox or a worker running agent-generated code, a short-lived access token instead:
+A private key belongs in a process you trust:
 
 ```python
-# On a trusted host, where the private key lives.
 mesa = Mesa(private_key=os.environ["MESA_PRIVATE_KEY"])
 ```
 
-Pass a private key through `private_key`, or omit it to read `MESA_PRIVATE_KEY`. The SDK does not accept access tokens; pass scoped tokens to the CLI, mounted MesaFS environments, or direct REST calls instead.
+Pass a private key through `private_key`, or omit it to read `MESA_PRIVATE_KEY`.
 
-#### Scoped access tokens
+#### Layout-scoped access tokens
 
-Mint a token in your trusted process and hand only that token to the sandbox or job that needs it:
+Build a filesystem layout in your trusted process, then hand the sandbox only its serialized layout and short-lived token:
 
 ```python
-minted = await mesa.tokens.create(
+from mesa_sdk import repo
+
+definition = mesa.fs(
+    layout={"/workspace": repo("agent-workspace", mode="rw")},
     authors=[{"name": "Mesa Bot", "email": "mesa-bot@example.com"}],
-    scopes=["read", "write"],
-    repos=["acme/agent-workspace"],
-    ttl_seconds=60 * 60,  # 1 hour
+    ttl=60 * 60,  # 1 hour
 )
+
+minted = await definition.token()
+layout_json = str(definition.layout())
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours.
+Write `layout_json` to `layout.json` in the receiving environment, set `MESA_ACCESS_TOKEN` to `minted.token`, and run `mesa mount --layout=layout.json`. A `ro` layout declaration grants `read-repo`; `rw` grants `write-repo`. Repositories outside the layout are not accessible.
+
+An access token lasts 15 minutes by default and can be given up to 4 hours. Use it with the Mesa CLI, MesaFS, or as a Bearer token in direct REST requests. The `Mesa` constructor accepts only private keys.
 
 ### Repositories
 
@@ -287,15 +292,17 @@ Filesystem operations raise standard Python exceptions:
 
 ### Low-Level REST Access
 
-For operations not covered by the resource namespaces, install and use `mesa-rest` directly, or call the API with your own HTTP client:
+For operations not covered by the resource namespaces, install and use `mesa-rest` directly, or call the API with your own HTTP client. Pass a token from `mesa.fs(...).token()` as the Bearer credential:
 
 ```python
+import os
+
 from mesa_rest.api.repo import list_repos
 from mesa_rest.client import AuthenticatedClient
 
 client = AuthenticatedClient(
     base_url="https://api.mesa.dev/v1",
-    token="mk_...",
+    token=os.environ["MESA_ACCESS_TOKEN"],
     prefix="Bearer",
 )
 response = await list_repos.asyncio_detailed("acme", client=client)

@@ -79,12 +79,7 @@ import {
 import { prettifyError } from 'zod';
 import { InvalidOptionsError, MesaWebhookVerificationError, MissingWebhookSecretError } from '../lib/errors.js';
 import { type WebhookEventName, WebhookEventSchema, type WebhookHandler } from '../webhooks/schemas.js';
-import {
-  type ApiRepositoryRestriction,
-  normalizeSigningKeyAuthors,
-  type RepositoryRestriction,
-  type SigningKeyAuthorInput,
-} from './access-token.js';
+import { normalizeSigningKeyAuthors, type SigningKeyAuthorInput } from './access-token.js';
 import type { RestClient } from './client.js';
 import { serializeRepoTagsFilter, type RepoTagFilter } from './repo-tag-filter.js';
 
@@ -109,32 +104,6 @@ type OrgRequestContext = {
 };
 
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
-
-/** Commit attribution carried by a private-key access token. */
-export type TokensCreateAuthor = SigningKeyAuthorInput;
-
-type TokensCreateBase = ApiRepositoryRestriction & {
-  /** Requested scopes. Defaults to read and write. */
-  scopes?: string[];
-};
-
-/** Private-key input accepted by the SDK's internal token signer. */
-export type TokensCreatePrivateKeyInput = TokensCreateBase & {
-  /** Ordered, nonempty commit attribution encoded into the token. */
-  authors: NonEmptyReadonlyArray<TokensCreateAuthor>;
-  /** Token lifetime in seconds (1..14400). Defaults to 900. */
-  ttl_seconds?: number;
-};
-
-export type TokensCreateInput = TokensCreatePrivateKeyInput;
-
-/** Result of minting a layout-scoped token with `mesa.fs({ layout }).token()`. */
-export type TokensCreateResponse = RepositoryRestriction<'repos', 'repo_ids'> & {
-  token: string;
-  /** Exact expiry as an ISO 8601 string. */
-  expires_at: string;
-  scopes: string[];
-};
 
 type ReposListInput = Omit<NonNullable<ListReposData['query']>, 'tags'> & {
   /** Structured tag filter object. */
@@ -208,6 +177,24 @@ type DistributiveOmit<T, TKey extends PropertyKey> = T extends unknown ? Omit<T,
 export type PrivateKeyChangesCreateInput = DistributiveOmit<ChangesCreateInput, 'author'> & PrivateKeyCommitAuthors;
 
 type ChangesPatchWithoutAttribution = Omit<ChangesPatchInput, 'author' | 'resolutions'>;
+
+/**
+ * The REST API still returns the deprecated singular `author` so older clients
+ * keep working. The high-level SDK does not: `authors` and `authored_at` are
+ * the only attribution it exposes. Raw `@mesadev/rest` results are unchanged.
+ */
+type WithoutLegacyAuthor<T> = Omit<T, 'author'>;
+export type ChangesListResponse = Omit<ListChangesResponse, 'changes'> & {
+  changes: Array<WithoutLegacyAuthor<ListChangesResponse['changes'][number]>>;
+};
+export type ChangesCreateResponse = WithoutLegacyAuthor<CreateChangeResponse>;
+export type ChangesGetResponse = WithoutLegacyAuthor<GetChangeResponse>;
+export type ChangesPatchResponse = WithoutLegacyAuthor<UpdateChangeResponse>;
+
+function removeLegacyAuthor<T extends { author: unknown }>(change: T): Omit<T, 'author'> {
+  const { author: _author, ...result } = change;
+  return result;
+}
 
 export type PrivateKeyChangesPatchInput =
   | (ChangesPatchWithoutAttribution & { resolutions?: never } & PrivateKeyCommitAuthors)
@@ -357,28 +344,36 @@ export function createApiResources({ restClient, orgSlug: org, webhookSecret, re
       },
     },
     changes: {
-      list: async (input: ChangesListInput): Promise<ListChangesResponse> => {
+      list: async (input: ChangesListInput): Promise<ChangesListResponse> => {
         const { repo, ...query } = input;
-        return restClient.request(listChanges, { path: { org, repo }, query });
+        const response = await restClient.request<ListChangesData, ListChangesResponse>(listChanges, {
+          path: { org, repo },
+          query,
+        });
+        return { ...response, changes: response.changes.map(removeLegacyAuthor) };
       },
-      create: async (input: PrivateKeyChangesCreateInput): Promise<CreateChangeResponse> => {
+      create: async (input: PrivateKeyChangesCreateInput): Promise<ChangesCreateResponse> => {
         const { repo, ...body } = input;
         const prepared = prepareCommitRequest(body, requestAttribution);
-        return restClient.request(
+        const response = await restClient.request<CreateChangeData, CreateChangeResponse>(
           createChange,
           { path: { org, repo }, body: prepared.body as CreateChangeData['body'] },
           prepared.credential
         );
+        return removeLegacyAuthor(response);
       },
-      get: async (input: ChangesGetInput): Promise<GetChangeResponse> => {
+      get: async (input: ChangesGetInput): Promise<ChangesGetResponse> => {
         const { repo, change_id: changeId } = input;
-        return restClient.request(getChange, { path: { org, repo, change_id: changeId } });
+        const response = await restClient.request<GetChangeData, GetChangeResponse>(getChange, {
+          path: { org, repo, change_id: changeId },
+        });
+        return removeLegacyAuthor(response);
       },
-      patch: async (input: PrivateKeyChangesPatchInput): Promise<UpdateChangeResponse> => {
+      patch: async (input: PrivateKeyChangesPatchInput): Promise<ChangesPatchResponse> => {
         const { repo, change_id: changeId, ...body } = input;
         const preserveExistingAuthors = Array.isArray(body.resolutions) && body.resolutions.length > 0;
         const prepared = prepareCommitRequest(body, requestAttribution, preserveExistingAuthors);
-        return restClient.request(
+        const response = await restClient.request<UpdateChangeData, UpdateChangeResponse>(
           updateChange,
           {
             path: { org, repo, change_id: changeId },
@@ -386,6 +381,7 @@ export function createApiResources({ restClient, orgSlug: org, webhookSecret, re
           },
           prepared.credential
         );
+        return removeLegacyAuthor(response);
       },
     },
     diffs: {

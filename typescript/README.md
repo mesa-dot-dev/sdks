@@ -39,20 +39,28 @@ This package exposes org-inferred REST resources under `mesa.*`.
 
 The private key names its organization, so the client picks it up from the key.
 
-### Scoped access tokens
+### Layout-scoped access tokens
 
-Mint a token in your trusted process and hand only that token to the sandbox or job that needs it:
+Build a filesystem layout in your trusted process, then hand the sandbox only its serialized layout and short-lived token:
 
 ```ts
-const { token } = await mesa.tokens.create({
+import { repo } from '@mesadev/sdk';
+
+const definition = mesa.fs({
+  layout: {
+    '/workspace': repo('agent-workspace', { mode: 'rw' }),
+  },
   authors: [{ name: 'Mesa Bot', email: 'mesa-bot@example.com' }],
-  scopes: ['read', 'write'],
-  repos: ['acme/agent-workspace'],
-  ttl_seconds: 60 * 60, // 1 hour
+  ttl: 60 * 60, // 1 hour
 });
+
+const { token } = await definition.token();
+const layoutJson = definition.layout().toString();
 ```
 
-A token signed by a private key lasts 15 minutes by default and can be given up to 4 hours. Pass scoped tokens to the Mesa CLI, MesaFS, or direct REST requests instead of constructing a TypeScript SDK client with them.
+Write `layoutJson` to `layout.json` in the receiving environment, set `MESA_ACCESS_TOKEN` to `token`, and run `mesa mount --layout=layout.json`. A `ro` layout declaration grants `read-repo`; `rw` grants `write-repo`. Repositories outside the layout are not accessible.
+
+An access token lasts 15 minutes by default and can be given up to 4 hours. Pass scoped tokens to the Mesa CLI, MesaFS, or direct REST requests instead of constructing a TypeScript SDK client with them.
 
 ## Webhook Handlers
 
@@ -64,10 +72,7 @@ parses the payload, and dispatches any registered handlers.
 import { Hono } from 'hono';
 import { Mesa } from '@mesadev/sdk';
 
-const mesa = new Mesa({
-  privateKey: process.env.MESA_PRIVATE_KEY,
-  webhookSecret: process.env.MESA_WEBHOOK_SECRET,
-});
+const mesa = new Mesa({ privateKey: process.env.MESA_PRIVATE_KEY, webhookSecret: process.env.MESA_WEBHOOK_SECRET });
 
 mesa.webhooks.on('push', (event) => {
   console.log('push:', event.data.updates[0]?.ref);

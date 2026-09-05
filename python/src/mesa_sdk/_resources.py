@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from datetime import datetime
+import datetime
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Union
 
 from mesa_rest.api.bookmark import (
@@ -118,6 +118,11 @@ from mesa_sdk._signing_key import (
 from mesa_sdk.errors import InvalidOptionsError
 from mesa_sdk.types import (
     Author,
+    Change,
+    ChangeDetails,
+    ChangesPage,
+    CommitIdentity,
+    CommitSignature,
     DiffConflictFilter,
     FileChange,
     FileDelete,
@@ -171,7 +176,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RequestAttribution:
-    """Private-key author handling for commit-producing requests."""
+    """Sign per-request author attribution for commit-producing requests."""
 
     sign: Callable[[NormalizedSigningKeyAuthors], str]
     auth: BearerAuth
@@ -281,6 +286,79 @@ def _to_create_file(
 
 def _to_update_committer(c: Author) -> UpdateChangeBodyCommitter:
     return UpdateChangeBodyCommitter(name=c.name, email=c.email, date=_opt(c.date))
+
+
+class _CommitIdentityResponse(Protocol):
+    name: str
+    email: None | str
+
+
+class _CommitSignatureResponse(Protocol):
+    name: str
+    email: str
+    date: datetime.datetime | Unset
+
+
+class _ChangeResponse(Protocol):
+    """The change shape shared by every generated change response model."""
+
+    id: str
+    current_commit_oid: str
+    is_conflicted: bool
+    message: str
+    authors: list[Any]
+    authored_at: datetime.datetime
+    committer: Any
+    parents: list[str]
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    additional_properties: dict[str, Any]
+
+
+def _to_commit_identity(author: _CommitIdentityResponse) -> CommitIdentity:
+    return CommitIdentity(name=author.name, email=author.email)
+
+
+def _to_commit_signature(signature: _CommitSignatureResponse) -> CommitSignature:
+    date = None if isinstance(signature.date, Unset) else signature.date
+    return CommitSignature(name=signature.name, email=signature.email, date=date)
+
+
+# The REST API still returns the deprecated singular ``author`` so older
+# clients keep working. The SDK does not copy it: ``authors`` and
+# ``authored_at`` are the only attribution a ``Change`` carries.
+def _to_change(response: _ChangeResponse) -> Change:
+    return Change(
+        id=response.id,
+        current_commit_oid=response.current_commit_oid,
+        is_conflicted=response.is_conflicted,
+        message=response.message,
+        authors=[_to_commit_identity(author) for author in response.authors],
+        authored_at=response.authored_at,
+        committer=_to_commit_signature(response.committer),
+        parents=list(response.parents),
+        created_at=response.created_at,
+        updated_at=response.updated_at,
+        additional_properties=dict(response.additional_properties),
+    )
+
+
+def _to_change_details(response: GetChangeResponse200) -> ChangeDetails:
+    change = _to_change(response)
+    return ChangeDetails(
+        **{f.name: getattr(change, f.name) for f in fields(change)},
+        files=list(response.files),
+        conflicts=list(response.conflicts),
+    )
+
+
+def _to_changes_page(response: ListChangesResponse200) -> ChangesPage:
+    return ChangesPage(
+        next_cursor=response.next_cursor,
+        has_more=response.has_more,
+        changes=[_to_change(change) for change in response.changes],
+        additional_properties=dict(response.additional_properties),
+    )
 
 
 def _to_update_file(
@@ -435,38 +513,6 @@ class OrgResource:
     async def get(self) -> GetOrgResponse200:
         resp = await get_org.asyncio_detailed(self._org_slug, client=self._client)
         return unwrap(resp)
-
-
-@dataclass(frozen=True)
-class TokenCreateResult:
-    """Result of :meth:`LayoutDefinition.token`.
-
-    Shape-compatible with the response the deleted ``POST /v1/:org/tokens``
-    endpoint returned, so existing callers keep working unchanged.
-    """
-
-    token: str
-    """The compact JWS access token string."""
-    expires_at: datetime
-    """Exact expiry, as a timezone-aware UTC ``datetime``."""
-    scopes: list[str]
-    """Effective scopes encoded into the token."""
-    repos: list[str] | None
-    """Effective repo restriction as full ``org/repo`` names. ``None`` = unrestricted."""
-    repo_ids: list[str] | None
-    """Effective canonical repository-ID restriction. ``None`` = not used."""
-
-
-class TokenSigner(Protocol):
-    async def __call__(
-        self,
-        *,
-        scopes: list[str] | None,
-        repos: list[str] | None,
-        repo_ids: list[str] | None,
-        authors: list[SigningKeyAuthor] | None,
-        ttl_seconds: int | None,
-    ) -> TokenCreateResult: ...
 
 
 class Repos:
@@ -769,7 +815,7 @@ class Bookmarks:
         allow_conflicted: bool | None = None,
         message: str | None = None,
         resolutions: list[Resolution] | None = None,
-        authors: list[SigningKeyAuthor] | None = None,
+        authors: list[SigningKeyAuthor],
     ) -> MergeBookmarkResponse200:
         """Merge ``source`` into ``target``.
 
@@ -835,7 +881,7 @@ class Changes:
         cursor: str | None = None,
         limit: int | None = None,
         bookmark: str | None = None,
-    ) -> ListChangesResponse200:
+    ) -> ChangesPage:
         """Pass ``bookmark`` to restrict to changes reachable from that bookmark."""
         resp = await list_changes.asyncio_detailed(
             self._org_slug,
@@ -845,18 +891,18 @@ class Changes:
             limit=_opt(limit),
             bookmark=_opt(bookmark),
         )
-        return unwrap(resp)
+        return _to_changes_page(unwrap(resp))
 
     async def create(
         self,
         *,
         repo: str,
         base_change_id: str,
+        authors: list[SigningKeyAuthor],
         message: str | None = None,
-        authors: list[SigningKeyAuthor] | None = None,
         committer: Author | None = None,
         files: list[FileChange] | None = None,
-    ) -> CreateChangeResponse201:
+    ) -> Change:
         """Create a change forked from ``base_change_id``.
 
         :param files: File operations to apply atomically. Each entry is
@@ -883,21 +929,21 @@ class Changes:
                 client=self._client,
                 body=body,
             )
-        return unwrap(resp)
+        return _to_change(unwrap(resp))
 
     async def get(
         self,
         *,
         repo: str,
         change_id: str,
-    ) -> GetChangeResponse200:
+    ) -> ChangeDetails:
         resp = await get_change.asyncio_detailed(
             self._org_slug,
             repo,
             change_id,
             client=self._client,
         )
-        return unwrap(resp)
+        return _to_change_details(unwrap(resp))
 
     async def patch(
         self,
@@ -910,7 +956,7 @@ class Changes:
         files: list[FileChange] | None = None,
         base_commit_oid: str | None = None,
         resolutions: list[Resolution] | None = None,
-    ) -> UpdateChangeResponse200:
+    ) -> Change:
         """Amend ``change_id``: edit message, identities, or apply more file ops.
 
         :param base_commit_oid: Optimistic-concurrency token. When set,
@@ -944,7 +990,7 @@ class Changes:
                 client=self._client,
                 body=body,
             )
-        return unwrap(resp)
+        return _to_change(unwrap(resp))
 
 
 class Diffs:
