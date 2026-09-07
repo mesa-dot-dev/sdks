@@ -1,4 +1,4 @@
-"""Filesystem namespace on the Mesa client."""
+"""Filesystem definitions and operations on the Mesa client."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+from copy import deepcopy
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,9 +24,9 @@ from typing import (
     TypeAlias,
 )
 
-from mesa_sdk._signing_key import (
-    NormalizedSigningKeyAuthors,
-    normalize_signing_key_authors,
+from mesa_sdk._private_key import (
+    NormalizedAccessTokenAuthors,
+    normalize_access_token_authors,
 )
 from mesa_sdk._native import (
     Bash,
@@ -38,7 +39,7 @@ from mesa_sdk._native import (
     validate_layout,
 )
 from mesa_sdk.errors import InvalidOptionsError
-from mesa_sdk.types import SigningKeyAuthor
+from mesa_sdk.types import Author
 
 if TYPE_CHECKING:
     from mesa_sdk._mesa import Mesa
@@ -48,9 +49,8 @@ __all__ = [
     "BookmarksOps",
     "ChangesOps",
     "FilesystemDefinition",
-    "FsNamespace",
+    "FilesystemDefinitions",
     "Layout",
-    "LayoutSpec",
     "MesaFileSystem",
     "MesaFileSystemSubscription",
     "Repo",
@@ -70,7 +70,7 @@ _LayoutMountMode: TypeAlias = Literal["ro", "rw"]
 
 @dataclass(frozen=True)
 class AccessToken:
-    """A short-lived credential minted for one filesystem layout."""
+    """A short-lived access token minted for one filesystem layout."""
 
     token: str
     """The compact JWS access token string."""
@@ -95,7 +95,7 @@ class _RepoRequired(TypedDict):
 
 
 class Repo(_RepoRequired, total=False):
-    """One repository declaration in serialized :class:`LayoutSpec` form.
+    """One repository declaration in serialized :class:`Layout` form.
 
     ``kind``, ``name``, and ``mode`` are always present; the remaining keys
     are optional and omitted from the serialized form when unset.
@@ -108,33 +108,11 @@ class Repo(_RepoRequired, total=False):
 
 
 # The mount-layout schema: a pure path map. Every key is an absolute
-# ("/"-prefixed) namespace path; the organization is not part of the
-# document. The client or CLI credential provides the mount context. The Rust
+# ("/"-prefixed) layout path; the organization is not part of the
+# document. The client or CLI access token provides the mount context. The Rust
 # core validates the authoritative schema and rejects any stray non-absolute
 # key.
-LayoutSpec = Mapping[str, "Repo | Sequence[Repo]"]
-
-
-@dataclass(frozen=True)
-class Layout:
-    """A serializable local layout for ``mesa mount --layout``."""
-
-    spec: LayoutSpec
-
-    def __post_init__(self) -> None:
-        # Snapshot to a real dict: json serialization requires one, and the
-        # layout must not alias the caller's mutable mapping.
-        object.__setattr__(self, "spec", dict(self.spec))
-
-    def __str__(self) -> str:
-        """Serialize the layout as deterministic, pretty-printed JSON."""
-        return (
-            json.dumps(self.spec, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        )
-
-    def to_json(self) -> LayoutSpec:
-        """Return the canonical :class:`LayoutSpec`."""
-        return self.spec
+Layout: TypeAlias = Mapping[str, "Repo | Sequence[Repo]"]
 
 
 def _reject_unknown_keys(
@@ -652,7 +630,7 @@ class FilesystemDefinition:
             ...
 
         # or hand the same definition to a CLI mount in a sandbox:
-        sandbox.upload_file("layout.json", str(definition.layout()))
+        sandbox.upload_file("layout.json", json.dumps(definition.layout(), indent=2))
         token = (await definition.token()).token
         sandbox.exec(
             "mesa mount --layout=layout.json",
@@ -662,10 +640,10 @@ class FilesystemDefinition:
 
     def __init__(
         self,
-        fs: "FsNamespace",
+        fs: "FilesystemDefinitions",
         layout: Layout,
         ttl: int | None,
-        authors: NormalizedSigningKeyAuthors,
+        authors: NormalizedAccessTokenAuthors,
     ) -> None:
         self._fs = fs
         self._layout = layout
@@ -673,8 +651,8 @@ class FilesystemDefinition:
         self._authors = authors
 
     def layout(self) -> Layout:
-        """The prepared layout, built from the raw path map the definition was given."""
-        return self._layout
+        """Return an independent plain-dict snapshot of the validated layout."""
+        return deepcopy(self._layout)
 
     def mount(
         self,
@@ -695,8 +673,8 @@ class FilesystemDefinition:
         return await self._fs._mint_layout_token(self._layout, self._ttl, self._authors)
 
 
-class FsNamespace:
-    """Filesystem namespace exposed as ``mesa.fs``."""
+class FilesystemDefinitions:
+    """Callable filesystem definition factory exposed as ``mesa.fs``."""
 
     def __init__(self, mesa: "Mesa") -> None:
         self._mesa = mesa
@@ -705,7 +683,7 @@ class FsNamespace:
         self,
         layout: Layout,
         ttl: int | None,
-        authors: NormalizedSigningKeyAuthors,
+        authors: NormalizedAccessTokenAuthors,
     ) -> AccessToken:
         """Sign the least-privilege access token for a definition's layout.
 
@@ -717,10 +695,6 @@ class FsNamespace:
         Authors are validated when the definition is created. ``ttl`` is
         validated while minting the token.
         """
-        # Run the core structural validator before minting so a malformed
-        # layout fails here with the mount's own error. Repository names
-        # resolve only at mount time.
-        validate_layout(str(layout))
         _, _, access = await self._layout_token_request(
             layout, "mesa.fs(layout=...).token()"
         )
@@ -734,27 +708,31 @@ class FsNamespace:
     def __call__(
         self,
         *,
-        layout: Mapping[str, Repo | Sequence[Repo]],
-        authors: list[SigningKeyAuthor],
+        layout: Layout,
+        authors: list[Author],
         ttl: int | None = None,
     ) -> FilesystemDefinition:
         """Bundle a layout with its mount and token operations.
 
         The raw path mapping builds eagerly, so an invalid mapping fails
         here at definition time. The returned definition is the only way to
-        mount a layout or mint its token: ``layout()`` serializes for
-        ``mesa mount --layout``, ``mount()`` opens the in-process
-        filesystem, and ``token()`` mints the layout-scoped credential.
+        mount a layout or mint its token: ``layout()`` returns the raw layout,
+        ``mount()`` opens the in-process filesystem, and ``token()`` mints the
+        layout-scoped access token. Serialize the result of ``layout()`` with
+        :func:`json.dumps` to prepare it for ``mesa mount --layout``.
         ``ttl`` is the lifetime of every token the definition mints and is
         validated when a token is minted. The call is synchronous, so the
         one-shot form needs no extra await:
         ``async with mesa.fs(layout={...}, authors=[...]).mount() as fs``.
         """
-        normalized_authors = normalize_signing_key_authors(authors)
+        normalized_authors = normalize_access_token_authors(authors)
         for path in layout:
             if not path.startswith("/"):
                 raise ValueError(f"mesa.fs(): top-level path '{path}' must be absolute")
-        return FilesystemDefinition(self, Layout(layout), ttl, normalized_authors)
+        layout_json = json.dumps(dict(layout))
+        validate_layout(layout_json)
+        prepared: Layout = json.loads(layout_json)
+        return FilesystemDefinition(self, prepared, ttl, normalized_authors)
 
     @asynccontextmanager
     async def _mount_layout(
@@ -762,7 +740,7 @@ class FsNamespace:
         layout: Layout,
         ttl: int | None,
         disk_cache: DiskCacheConfig | None,
-        authors: NormalizedSigningKeyAuthors,
+        authors: NormalizedAccessTokenAuthors,
     ) -> AsyncIterator[MesaFileSystem]:
         """Mount a definition's layout as the complete namespace.
 
@@ -771,15 +749,12 @@ class FsNamespace:
         repositories by name. Authors are validated when the definition is
         created; ``ttl`` is validated while minting the mount token.
         """
-        # Keep mount() and token() aligned: malformed layouts fail before
-        # signing a credential or attempting native filesystem construction.
-        validate_layout(str(layout))
         layout, org, access = await self._layout_token_request(
             layout, "mesa.fs(layout=...).mount()"
         )
 
         # Names are signed offline; no repository lookup is needed to mint the token.
-        credential = await self._mesa._create_mount_token(
+        access_token = await self._mesa._create_mount_token(
             access=access,
             authors=authors,
             ttl_seconds=ttl,
@@ -787,9 +762,9 @@ class FsNamespace:
 
         config = _MesaConfig(
             org=org,
-            credential=credential,
+            access_token=access_token,
             repos=[],
-            layout=str(layout),
+            layout=json.dumps(layout),
             api_base_url=self._mesa.api_url,
             disk_cache=disk_cache,
         )
@@ -807,7 +782,7 @@ class FsNamespace:
     ]:
         """Derive the least-privilege token request for ``layout``.
 
-        Returns the prepared layout, client organization, and narrowest access
+        Returns the snapshotted layout, client organization, and narrowest access
         for each declared repository. Shared by :meth:`_mount_layout` and
         :meth:`_mint_layout_token` so the derivation exists exactly once.
         """
@@ -816,7 +791,7 @@ class FsNamespace:
         org = self._mesa.org.slug
         declarations: list[Repo] = []
 
-        def visit(entries: Mapping[str, Repo | Sequence[Repo]]) -> None:
+        def visit(entries: Layout) -> None:
             for entry in entries.values():
                 nested = entry if isinstance(entry, Sequence) else [entry]
                 for declaration in nested:
@@ -825,8 +800,8 @@ class FsNamespace:
                     if sub_paths is not None:
                         visit(sub_paths)
 
-        # The spec is a pure path map: every entry is a declaration.
-        visit(layout.spec)
+        # The layout is a pure path map: every entry is a declaration.
+        visit(layout)
         if not declarations:
             raise InvalidOptionsError(
                 f"{caller} requires at least one layout repository"

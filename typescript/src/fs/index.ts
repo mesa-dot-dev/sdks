@@ -1,12 +1,4 @@
-export {
-  type Layout,
-  type LayoutSpec,
-  type MountMode,
-  repo,
-  type Repo,
-  type RepoOptions,
-  type RepoSelectorInput,
-} from './layout.js';
+export { type Layout, type MountMode, repo, type Repo, type RepoOptions, type RepoSelectorInput } from './layout.js';
 export {
   type BookmarkCreateArgs,
   type BookmarkListArgs,

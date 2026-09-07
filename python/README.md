@@ -44,6 +44,7 @@ Pass a private key through `private_key`, or omit it to read `MESA_PRIVATE_KEY`.
 Build a filesystem layout in your trusted process, then hand the sandbox only its serialized layout and short-lived token:
 
 ```python
+import json
 from mesa_sdk import repo
 
 definition = mesa.fs(
@@ -53,7 +54,7 @@ definition = mesa.fs(
 )
 
 minted = await definition.token()
-layout_json = str(definition.layout())
+layout_json = json.dumps(definition.layout(), indent=2)
 ```
 
 Write `layout_json` to `layout.json` in the receiving environment, set `MESA_ACCESS_TOKEN` to `minted.token`, and run `mesa mount --layout=layout.json`. A `ro` layout declaration grants `read-repo`; `rw` grants `write-repo`. Repositories outside the layout are not accessible.
@@ -314,7 +315,7 @@ response = await list_repos.asyncio_detailed("acme", client=client)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Signing private key for trusted processes |
+| `private_key` | `str \| None` | `MESA_PRIVATE_KEY` env var | Private key for trusted processes |
 | `api_url` | `str` | `https://api.mesa.dev/v1` | Base URL for the Mesa API |
 | `user_agent` | `str \| None` | `None` | Custom user agent suffix |
 | `webhook_secret` | `str \| None` | `None` | Secret used by `mesa.webhooks.receive(...)` |
@@ -332,13 +333,13 @@ async with Mesa() as mesa:
     except NotFoundError:
         print("Repo not found")
     except AuthenticationError:
-        print("Invalid credential")
+        print("Invalid access token")
 ```
 
 | Exception | HTTP Status | Description |
 |-----------|-------------|-------------|
 | `ValidationError` | 400, 406 | Invalid request parameters |
-| `AuthenticationError` | 401 | Invalid or missing credential |
+| `AuthenticationError` | 401 | Invalid or missing access token |
 | `AuthorizationError` | 403 | Insufficient permissions |
 | `NotFoundError` | 404 | Resource not found |
 | `ConflictError` | 409 | Resource conflict |

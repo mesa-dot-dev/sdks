@@ -109,11 +109,11 @@ from mesa_rest.models.update_webhook_target_body_events_item import (
 )
 from mesa_rest.types import UNSET, Unset
 
-from mesa_sdk._client import BearerAuth, request_credential, unwrap
+from mesa_sdk._client import BearerAuth, request_access_token, unwrap
 from mesa_sdk._content_helpers import install_content_model_helpers
-from mesa_sdk._signing_key import (
-    NormalizedSigningKeyAuthors,
-    normalize_signing_key_authors,
+from mesa_sdk._private_key import (
+    NormalizedAccessTokenAuthors,
+    normalize_access_token_authors,
 )
 from mesa_sdk.errors import InvalidOptionsError
 from mesa_sdk.types import (
@@ -123,12 +123,12 @@ from mesa_sdk.types import (
     ChangesPage,
     CommitIdentity,
     CommitSignature,
+    Committer,
     DiffConflictFilter,
     FileChange,
     FileDelete,
     HunkResolution,
     Resolution,
-    SigningKeyAuthor,
     UpstreamAuth,
     UpstreamConfig,
     UsernamePasswordAuth,
@@ -178,14 +178,14 @@ if TYPE_CHECKING:
 class RequestAttribution:
     """Sign per-request author attribution for commit-producing requests."""
 
-    sign: Callable[[NormalizedSigningKeyAuthors], str]
+    sign: Callable[[NormalizedAccessTokenAuthors], str]
     auth: BearerAuth
 
 
 def _prepare_commit_request(
     *,
     attribution: RequestAttribution,
-    authors: list[SigningKeyAuthor] | None,
+    authors: list[Author] | None,
     preserve_existing_authors: bool = False,
 ) -> str | None:
     if preserve_existing_authors:
@@ -199,7 +199,7 @@ def _prepare_commit_request(
         raise InvalidOptionsError(
             "Private-key commit operations require a nonempty `authors` list."
         )
-    return attribution.sign(normalize_signing_key_authors(authors))
+    return attribution.sign(normalize_access_token_authors(authors))
 
 
 def _opt(value: object) -> Any:
@@ -266,7 +266,7 @@ def _to_update_repo_upstream(
     return body
 
 
-def _to_create_committer(c: Author) -> CreateChangeBodyCommitter:
+def _to_create_committer(c: Committer) -> CreateChangeBodyCommitter:
     return CreateChangeBodyCommitter(name=c.name, email=c.email, date=_opt(c.date))
 
 
@@ -284,7 +284,7 @@ def _to_create_file(
     )
 
 
-def _to_update_committer(c: Author) -> UpdateChangeBodyCommitter:
+def _to_update_committer(c: Committer) -> UpdateChangeBodyCommitter:
     return UpdateChangeBodyCommitter(name=c.name, email=c.email, date=_opt(c.date))
 
 
@@ -507,7 +507,7 @@ class OrgResource:
 
     @property
     def slug(self) -> str:
-        """Organization slug parsed from the client's credential."""
+        """Organization slug parsed from the client's private key."""
         return self._org_slug
 
     async def get(self) -> GetOrgResponse200:
@@ -815,7 +815,7 @@ class Bookmarks:
         allow_conflicted: bool | None = None,
         message: str | None = None,
         resolutions: list[Resolution] | None = None,
-        authors: list[SigningKeyAuthor],
+        authors: list[Author],
     ) -> MergeBookmarkResponse200:
         """Merge ``source`` into ``target``.
 
@@ -833,7 +833,7 @@ class Bookmarks:
             or a set of per-hunk replacements.
         :param authors: Ordered commit attribution for a private-key client.
         """
-        credential = _prepare_commit_request(
+        access_token = _prepare_commit_request(
             attribution=self._request_attribution,
             authors=authors,
         )
@@ -848,7 +848,7 @@ class Bookmarks:
         )
         if message is not None:
             body["message"] = message
-        with request_credential(self._request_attribution.auth, credential):
+        with request_access_token(self._request_attribution.auth, access_token):
             resp = await merge_bookmark.asyncio_detailed(
                 self._org_slug,
                 repo,
@@ -898,9 +898,9 @@ class Changes:
         *,
         repo: str,
         base_change_id: str,
-        authors: list[SigningKeyAuthor],
+        authors: list[Author],
         message: str | None = None,
-        committer: Author | None = None,
+        committer: Committer | None = None,
         files: list[FileChange] | None = None,
     ) -> Change:
         """Create a change forked from ``base_change_id``.
@@ -910,7 +910,7 @@ class Changes:
         :param authors: Ordered commit attribution for a private-key client.
         :param committer: Committer identity for the new change.
         """
-        credential = _prepare_commit_request(
+        access_token = _prepare_commit_request(
             attribution=self._request_attribution,
             authors=authors,
         )
@@ -922,7 +922,7 @@ class Changes:
             else UNSET,
             files=[_to_create_file(f) for f in files] if files is not None else UNSET,
         )
-        with request_credential(self._request_attribution.auth, credential):
+        with request_access_token(self._request_attribution.auth, access_token):
             resp = await create_change.asyncio_detailed(
                 self._org_slug,
                 repo,
@@ -951,8 +951,8 @@ class Changes:
         repo: str,
         change_id: str,
         message: str | None = None,
-        authors: list[SigningKeyAuthor] | None = None,
-        committer: Author | None = None,
+        authors: list[Author] | None = None,
+        committer: Committer | None = None,
         files: list[FileChange] | None = None,
         base_commit_oid: str | None = None,
         resolutions: list[Resolution] | None = None,
@@ -966,7 +966,7 @@ class Changes:
             change. Mutually exclusive with ``files``.
         :param authors: Ordered commit attribution for a private-key client.
         """
-        credential = _prepare_commit_request(
+        access_token = _prepare_commit_request(
             attribution=self._request_attribution,
             authors=authors,
             preserve_existing_authors=bool(resolutions),
@@ -982,7 +982,7 @@ class Changes:
             if resolutions is not None
             else UNSET,
         )
-        with request_credential(self._request_attribution.auth, credential):
+        with request_access_token(self._request_attribution.auth, access_token):
             resp = await update_change.asyncio_detailed(
                 self._org_slug,
                 repo,

@@ -24,49 +24,49 @@ class BearerAuth(httpx.Auth):
     """Mint a fresh bearer credential for each HTTP request.
 
     Private-key clients don't hold a fixed bearer secret: they sign a
-    short-lived access token per request. ``credential`` is a zero-argument
+    short-lived access token per request. ``access_token_factory`` is a zero-argument
     minting function rather than a string so each request gets a current
     token, and so this transport module stays decoupled from the signing
     module that knows how to produce one (mirroring the TS SDK, whose REST
     client takes ``string | (() => string)``).
     """
 
-    def __init__(self, credential: Callable[[], str]) -> None:
-        self._credential = credential
-        self._credential_override: ContextVar[str | None] = ContextVar(
-            "mesa_request_credential", default=None
+    def __init__(self, access_token_factory: Callable[[], str]) -> None:
+        self._access_token_factory = access_token_factory
+        self._access_token_override: ContextVar[str | None] = ContextVar(
+            "mesa_request_access_token", default=None
         )
 
     @contextmanager
-    def override(self, credential: str) -> Iterator[None]:
-        token = self._credential_override.set(credential)
+    def override(self, access_token: str) -> Iterator[None]:
+        token = self._access_token_override.set(access_token)
         try:
             yield
         finally:
-            self._credential_override.reset(token)
+            self._access_token_override.reset(token)
 
     def auth_flow(
         self, request: httpx.Request
     ) -> Generator[httpx.Request, httpx.Response, None]:
-        credential = self._credential_override.get() or self._credential()
-        request.headers["Authorization"] = f"Bearer {credential}"
+        access_token = self._access_token_override.get() or self._access_token_factory()
+        request.headers["Authorization"] = f"Bearer {access_token}"
         yield request
 
 
 @contextmanager
-def request_credential(auth: BearerAuth, credential: str | None) -> Iterator[None]:
+def request_access_token(auth: BearerAuth, access_token: str | None) -> Iterator[None]:
     """Override one private-key request without mutating shared client state."""
-    if credential is None:
+    if access_token is None:
         yield
         return
 
-    with auth.override(credential):
+    with auth.override(access_token):
         yield
 
 
 def create_client(
     *,
-    credential: BearerAuth,
+    auth: BearerAuth,
     api_url: str,
     user_agent: str | None = None,
 ) -> AuthenticatedClient:
@@ -81,7 +81,7 @@ def create_client(
         prefix="",
         headers=headers,
         raise_on_unexpected_status=False,
-        httpx_args={"auth": credential},
+        httpx_args={"auth": auth},
     )
 
 

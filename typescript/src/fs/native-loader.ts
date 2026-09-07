@@ -45,7 +45,7 @@ export type NativeRepoConfig = NativeRepoConfigBase &
 
 export interface NativeConfig {
   org: string;
-  credential: string;
+  accessToken: string;
   repos: NativeRepoConfig[];
   layout: string;
   cache?: {

@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Rename `FsLayoutAuthor` to `Author` for commit attribution across commit-producing operations
+- **Breaking:** Rename the access-token-only `MesaFileSystemConfig.credential` field to `accessToken` and report an empty value with `MissingAccessTokenError` (`MISSING_ACCESS_TOKEN`)
+- **Breaking:** Rename `MissingCredentialError` to `MissingPrivateKeyError` and its code from `MISSING_CREDENTIAL` to `MISSING_PRIVATE_KEY`
+- **Breaking:** Consolidate `LayoutSpec` and the prepared `Layout` wrapper into a validated, plain `Layout` map; serialize it with `JSON.stringify()`
+
 ### Added
 
 - Add `authors` and `authored_at` to `change.created` and `change.evolved` webhook events; `email` is `null` when none was supplied

@@ -25,7 +25,6 @@ export {
   type CheckpointResult,
   type ChangeRevArgs,
   type Layout,
-  type LayoutSpec,
   type LogRecord,
   type MesaBashOptions,
   // Type-only: the filesystem is reachable exclusively through
@@ -48,10 +47,10 @@ export {
   type WatchEventHandler,
 } from './fs/index.js';
 export * from './lib/errors.js';
+export { type Author } from './api/access-token.js';
 export {
   type AccessToken,
   type FilesystemDefinition,
-  type FsLayoutAuthor,
   type FsMountRuntimeOptions,
   Mesa,
   type MesaOptions,

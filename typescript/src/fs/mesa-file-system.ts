@@ -10,7 +10,7 @@ import {
   type RmOptions,
 } from 'just-bash';
 import { looksLikePrivateKey } from '../api/credentials.js';
-import { InvalidOptionsError, MissingCredentialError } from '../lib/errors.js';
+import { InvalidOptionsError, MissingAccessTokenError } from '../lib/errors.js';
 import type {
   NativeMesaFileSystem,
   NativeMesaFileSystemWatcher,
@@ -20,7 +20,7 @@ import type {
   NativeWatchEvent,
 } from './native-loader.js';
 import { loadNativeAddon } from './native-loader.js';
-import type { BranchedRevision, Layout, RevisionIdentifier } from './layout.js';
+import { type BranchedRevision, type Layout, type RevisionIdentifier } from './layout.js';
 
 export interface ChangeResult {
   /** Reverse-hex-encoded change ID of the now-active change (JJ format, lowercase letters `k`–`z`). */
@@ -245,7 +245,7 @@ export interface MesaFileSystemConfigBase {
 }
 
 /** Bearer access token used for all storage operations. */
-export type MesaFileSystemConfig = MesaFileSystemConfigBase & { credential: string };
+export type MesaFileSystemConfig = MesaFileSystemConfigBase & { accessToken: string };
 
 function getEncoding(
   options?: { encoding?: BufferEncoding | null } | BufferEncoding | null | undefined
@@ -349,25 +349,25 @@ export class MesaFileSystem implements IFileSystem {
    * expires the mount fails closed, and resuming means signing a new token
    * and opening a new filesystem.
    *
-   * Rejects with {@link MissingCredentialError} when `credential` is empty and
+   * Rejects with {@link MissingAccessTokenError} when `accessToken` is empty and
    * {@link InvalidOptionsError} when it is a private key rather than an access
    * token.
    */
   static async createAsync(config: MesaFileSystemConfig): Promise<MesaFileSystem> {
-    const credential = config.credential;
-    if (!credential) {
-      throw new MissingCredentialError();
+    const accessToken = config.accessToken;
+    if (!accessToken) {
+      throw new MissingAccessTokenError();
     }
-    if (looksLikePrivateKey(credential)) {
+    if (looksLikePrivateKey(accessToken)) {
       throw new InvalidOptionsError('MesaFileSystem requires an access token, not a private key.');
     }
 
     const { onLog, ...telemetryRest } = config.telemetry ?? {};
-    const { credential: _credential, ...rest } = config;
+    const { accessToken: _accessToken, ...rest } = config;
     const napiConfig: NativeConfig = {
       ...rest,
-      credential,
-      layout: config.layout.toString(),
+      accessToken,
+      layout: JSON.stringify(config.layout),
       telemetry: Object.keys(telemetryRest).length > 0 ? telemetryRest : undefined,
       repos: config.repos.map(toNativeRepoConfig),
     };

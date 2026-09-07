@@ -111,7 +111,7 @@ class _MesaConfig:
     """Internal filesystem configuration assembled by the mount flow."""
 
     org: str
-    credential: str
+    access_token: str
     repos: list[RepoConfig]
     layout: str
     disk_cache: DiskCacheConfig | None
@@ -120,7 +120,7 @@ class _MesaConfig:
     def __new__(
         cls,
         org: str,
-        credential: str,
+        access_token: str,
         repos: Sequence[RepoConfig],
         *,
         layout: str,

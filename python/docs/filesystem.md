@@ -14,6 +14,7 @@ Set `MESA_PRIVATE_KEY` in your environment, or pass it directly:
 
 ```python
 import asyncio
+import json
 import os
 from mesa_sdk import Mesa, repo
 
@@ -44,7 +45,7 @@ declarations. Call `mesa.fs(layout=..., authors=..., ttl=...)` to build a
    namespace is exactly the layout paths.
 
 The mount uses that single token for its whole lifetime. There is no background
-refresh and no credential hot-swap: when the token expires, the mount stops
+refresh and no access-token replacement: when the token expires, the mount stops
 authenticating. When the context exits (normally or on error), the SDK flushes
 pending filesystem writes.
 
@@ -91,7 +92,8 @@ definition = mesa.fs(
     ttl=3600,
 )
 token = (await definition.token()).token
-# Hand token + definition.layout() to a sandbox running `mesa mount --layout`,
+# Hand token + json.dumps(definition.layout()) to a sandbox running
+# `mesa mount --layout`,
 # or use the token as a Bearer credential for direct REST requests.
 ```
 

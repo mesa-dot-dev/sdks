@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Rename `SigningKeyAuthor` to `Author` for commit attribution and rename the existing committer `Author` dataclass to `Committer`
+- **Breaking:** Consolidate `LayoutSpec` and the `Layout` wrapper into a validated, plain `Layout` mapping, serialize it with `json.dumps()`, and rename `FsNamespace` to `FilesystemDefinitions`
+
 ### Added
 
 - Add `authors` and `authored_at` to `change.created` and `change.evolved` webhook events; `email` is `null` when none was supplied

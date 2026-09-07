@@ -1,7 +1,8 @@
 export type MesaErrorCode =
   | 'INVALID_API_URL'
   | 'INVALID_OPTIONS'
-  | 'MISSING_CREDENTIAL'
+  | 'MISSING_ACCESS_TOKEN'
+  | 'MISSING_PRIVATE_KEY'
   | 'MISSING_WEBHOOK_SECRET'
   | 'ORG_RESOLUTION_FAILED'
   | 'WEBHOOK_VERIFICATION_FAILED';
@@ -41,10 +42,17 @@ export class MesaApiError extends Error {
   }
 }
 
-export class MissingCredentialError extends MesaError {
-  constructor(message = 'Missing credential.') {
-    super('MISSING_CREDENTIAL', message);
-    this.name = 'MissingCredentialError';
+export class MissingPrivateKeyError extends MesaError {
+  constructor(message = 'Missing private key.') {
+    super('MISSING_PRIVATE_KEY', message);
+    this.name = 'MissingPrivateKeyError';
+  }
+}
+
+export class MissingAccessTokenError extends MesaError {
+  constructor(message = 'Missing access token.') {
+    super('MISSING_ACCESS_TOKEN', message);
+    this.name = 'MissingAccessTokenError';
   }
 }
 

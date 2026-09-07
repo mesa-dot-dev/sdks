@@ -1,8 +1,8 @@
-"""Ed25519 private-key parsing and signing-key access-token minting.
+"""Ed25519 private-key parsing and access-token minting.
 
 The private key stays in the Python process. This module parses the canonical
 Mesa private-key envelope, normalizes optional ordered authors, and signs the
-JWT contract accepted by ``packages/core/src/auth/signing-key-access-token.ts``.
+JWT contract accepted by ``packages/core/src/auth/access-token.ts``.
 """
 
 from __future__ import annotations
@@ -28,19 +28,19 @@ from mesa_sdk.errors import InvalidOptionsError
 ACCESS_TOKEN_AUD = "mesa-api"
 #: JOSE ``typ`` header distinguishing Mesa access tokens.
 ACCESS_TOKEN_TYP = "mesa-at+jwt"
-#: Prefix for organization-bound Ed25519 signing private keys.
+#: Prefix for organization-bound Ed25519 private keys.
 MESA_PRIVATE_KEY_PREFIX = "mesa_private_key_"
-#: Default signing-key token lifetime.
-SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60  # 15 minutes
-#: Hard cap enforced by the signing-key verifier.
-SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60  # 4 hours
-#: Maximum ordered commit authors accepted by the signing-key verifier.
-MAX_SIGNING_KEY_AUTHORS = 100
-#: Maximum repository grants accepted by the signing-key verifier.
-MAX_SIGNING_KEY_ACCESS_ENTRIES = 250
+#: Default access-token lifetime.
+ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60  # 15 minutes
+#: Hard cap enforced by the access-token verifier.
+ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60  # 4 hours
+#: Maximum ordered commit authors accepted by the access-token verifier.
+MAX_ACCESS_TOKEN_AUTHORS = 100
+#: Maximum repository grants accepted by the access-token verifier.
+MAX_ACCESS_TOKEN_ACCESS_ENTRIES = 250
 
-SigningKeyAccessLevel: TypeAlias = Literal["read-repo", "write-repo"]
-SigningKeyAccess: TypeAlias = Mapping[str, SigningKeyAccessLevel]
+AccessTokenAccessLevel: TypeAlias = Literal["read-repo", "write-repo"]
+AccessTokenAccess: TypeAlias = Mapping[str, AccessTokenAccessLevel]
 
 _MESA_PRIVATE_KEY_BODY_PATTERN = re.compile(
     r"^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)_([A-Za-z0-9_-]+)$"
@@ -51,14 +51,14 @@ _PEM_PRIVATE_KEY_PATTERN = re.compile(
 )
 
 
-class NormalizedSigningKeyAuthor(NamedTuple):
+class NormalizedAccessTokenAuthor(NamedTuple):
     """One validated author ready for the token's object-shaped claim."""
 
     name: str
     email: str | None
 
 
-NormalizedSigningKeyAuthors: TypeAlias = tuple[NormalizedSigningKeyAuthor, ...]
+NormalizedAccessTokenAuthors: TypeAlias = tuple[NormalizedAccessTokenAuthor, ...]
 
 
 class PublicJwk(TypedDict):
@@ -183,9 +183,9 @@ def parse_private_key(private_key: str) -> PrivateKeyCredential:
     )
 
 
-def normalize_signing_key_authors(
+def normalize_access_token_authors(
     authors: Sequence[Mapping[str, object]],
-) -> NormalizedSigningKeyAuthors:
+) -> NormalizedAccessTokenAuthors:
     """Validate authors and return an immutable ordered representation."""
     if (
         isinstance(authors, (str, bytes))
@@ -193,12 +193,12 @@ def normalize_signing_key_authors(
         or not authors
     ):
         raise InvalidOptionsError("Invalid authors: at least one author is required.")
-    if len(authors) > MAX_SIGNING_KEY_AUTHORS:
+    if len(authors) > MAX_ACCESS_TOKEN_AUTHORS:
         raise InvalidOptionsError(
-            f"Invalid authors: At most {MAX_SIGNING_KEY_AUTHORS} authors are allowed."
+            f"Invalid authors: At most {MAX_ACCESS_TOKEN_AUTHORS} authors are allowed."
         )
 
-    normalized: list[NormalizedSigningKeyAuthor] = []
+    normalized: list[NormalizedAccessTokenAuthor] = []
     for index, author in enumerate(authors):
         if not isinstance(author, Mapping):
             raise InvalidOptionsError(
@@ -238,26 +238,26 @@ def normalize_signing_key_authors(
                 f"Invalid authors.{index}.email: Author emails must not contain "
                 "Mesa private keys."
             )
-        normalized.append(NormalizedSigningKeyAuthor(normalized_name, normalized_email))
+        normalized.append(NormalizedAccessTokenAuthor(normalized_name, normalized_email))
 
     return tuple(normalized)
 
 
-def normalize_signing_key_access(
-    access: SigningKeyAccess,
-) -> dict[str, SigningKeyAccessLevel]:
+def normalize_access_token_access(
+    access: AccessTokenAccess,
+) -> dict[str, AccessTokenAccessLevel]:
     """Validate and normalize repository rules with write precedence."""
     if not isinstance(access, Mapping) or not access:
         raise InvalidOptionsError(
             "Invalid access: at least one repository is required."
         )
-    if len(access) > MAX_SIGNING_KEY_ACCESS_ENTRIES:
+    if len(access) > MAX_ACCESS_TOKEN_ACCESS_ENTRIES:
         raise InvalidOptionsError(
             "Invalid access: at most "
-            f"{MAX_SIGNING_KEY_ACCESS_ENTRIES} repositories are allowed."
+            f"{MAX_ACCESS_TOKEN_ACCESS_ENTRIES} repositories are allowed."
         )
 
-    repos: dict[str, tuple[str, SigningKeyAccessLevel]] = {}
+    repos: dict[str, tuple[str, AccessTokenAccessLevel]] = {}
     for repo, level in access.items():
         if not isinstance(repo, str):
             raise InvalidOptionsError(
@@ -291,12 +291,12 @@ def normalize_signing_key_access(
 def sign_automatic_private_key_access_token(
     *,
     private_key: PrivateKeyCredential,
-    authors: NormalizedSigningKeyAuthors | None = None,
-    access: SigningKeyAccess | None = None,
+    authors: NormalizedAccessTokenAuthors | None = None,
+    access: AccessTokenAccess | None = None,
     admin: Literal[True] | None = None,
     ttl_seconds: int | None = None,
 ) -> SignedAccessToken:
-    """Sign an internal request or MesaFS credential."""
+    """Sign an internal request or MesaFS access token."""
     if not (
         (admin is True and access is None) or (admin is None and access is not None)
     ):
@@ -306,20 +306,20 @@ def sign_automatic_private_key_access_token(
     ttl = (
         ttl_seconds
         if ttl_seconds is not None
-        else SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS
+        else ACCESS_TOKEN_DEFAULT_TTL_SECONDS
     )
     if (
         type(ttl) is not int
         or ttl <= 0
-        or ttl > SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS
+        or ttl > ACCESS_TOKEN_MAX_TTL_SECONDS
     ):
         raise InvalidOptionsError(
             "Token TTL must be an integer between 1 and "
-            f"{SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS} seconds"
+            f"{ACCESS_TOKEN_MAX_TTL_SECONDS} seconds"
         )
 
     normalized_access = (
-        normalize_signing_key_access(access) if access is not None else None
+        normalize_access_token_access(access) if access is not None else None
     )
     iat = int(time.time())
     exp = iat + ttl

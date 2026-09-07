@@ -6,17 +6,17 @@ from urllib.parse import urlparse
 
 from mesa_rest.api.org import whoami as whoami_api
 
-from mesa_sdk._signing_key import (
-    NormalizedSigningKeyAuthors,
+from mesa_sdk._private_key import (
+    NormalizedAccessTokenAuthors,
     PrivateKeyCredential,
     SignedAccessToken,
-    SigningKeyAccess,
+    AccessTokenAccess,
     looks_like_private_key,
     parse_private_key,
     sign_automatic_private_key_access_token,
 )
 from mesa_sdk._client import BearerAuth, create_client, unwrap
-from mesa_sdk._fs import FsNamespace
+from mesa_sdk._fs import FilesystemDefinitions
 from mesa_sdk._resources import (
     Bookmarks,
     Changes,
@@ -104,7 +104,7 @@ class Mesa:
         """Construct a Mesa client.
 
         :param private_key: Organization-bound Ed25519 private key used to
-            sign fresh request and filesystem credentials locally. Falls back
+            sign fresh request and filesystem access tokens locally. Falls back
             to the ``MESA_PRIVATE_KEY`` environment variable.
         :param api_url: Override the default API endpoint.
         :param user_agent: Custom ``User-Agent`` header.
@@ -144,7 +144,7 @@ class Mesa:
         )
 
         self._client = create_client(
-            credential=bearer_auth,
+            auth=bearer_auth,
             api_url=self.api_url,
             user_agent=user_agent,
         )
@@ -161,8 +161,8 @@ class Mesa:
     async def _create_mount_token(
         self,
         *,
-        access: SigningKeyAccess,
-        authors: NormalizedSigningKeyAuthors,
+        access: AccessTokenAccess,
+        authors: NormalizedAccessTokenAuthors,
         ttl_seconds: int | None,
     ) -> str:
         """Return the bearer credential for a filesystem mount."""
@@ -175,11 +175,11 @@ class Mesa:
     def _sign_layout_token(
         self,
         *,
-        access: SigningKeyAccess,
-        authors: NormalizedSigningKeyAuthors,
+        access: AccessTokenAccess,
+        authors: NormalizedAccessTokenAuthors,
         ttl_seconds: int | None,
     ) -> SignedAccessToken:
-        """Sign a private-key filesystem layout credential."""
+        """Sign a private-key filesystem layout access token."""
         return sign_automatic_private_key_access_token(
             private_key=self._credential,
             authors=authors,
@@ -188,18 +188,18 @@ class Mesa:
         )
 
     @property
-    def fs(self) -> FsNamespace:
-        """Filesystem namespace for mounting repos as a virtual filesystem.
+    def fs(self) -> FilesystemDefinitions:
+        """Callable factory for filesystem definitions.
 
         Use :meth:`mesa.fs(layout=...).mount() <mesa_sdk.FilesystemDefinition.mount>`
         to open a :class:`MesaFileSystem`.
         """
         if not hasattr(self, "_fs"):
-            self._fs = FsNamespace(self)
+            self._fs = FilesystemDefinitions(self)
         return self._fs
 
     async def whoami(self) -> WhoamiResponse200:
-        """Return the identity tied to the credential. Cached after first call."""
+        """Return the identity tied to the private key. Cached after first call."""
         if self._cached_whoami is not None:
             return self._cached_whoami
 

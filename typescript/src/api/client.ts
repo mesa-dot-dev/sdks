@@ -22,7 +22,7 @@ export type RestRequestOptions<TData extends RestDataShape> = Simplify<
 
 type RestClientConfig = {
   /** Bearer credential, or a local signer that returns one for each request. */
-  credential: string | (() => string);
+  accessToken: string | (() => string);
   apiUrl: string;
   fetch?: typeof globalThis.fetch;
   userAgent?: string;
@@ -37,7 +37,7 @@ export type RestClient = {
   request<TData extends RestDataShape, TResult>(
     operation: RestOperation,
     options?: RestRequestOptions<TData>,
-    credentialOverride?: string
+    accessTokenOverride?: string
   ): Promise<TResult>;
   whoami(): Promise<WhoamiResponse>;
 };
@@ -55,15 +55,15 @@ export function createRestClient(config: RestClientConfig): RestClient {
   const request = async <TData extends RestDataShape, TResult>(
     operation: RestOperation,
     options: RestRequestOptions<TData> = {} as RestRequestOptions<TData>,
-    credentialOverride?: string
+    accessTokenOverride?: string
   ): Promise<TResult> => {
-    const credential =
-      credentialOverride ?? (typeof config.credential === 'function' ? config.credential() : config.credential);
+    const accessToken =
+      accessTokenOverride ?? (typeof config.accessToken === 'function' ? config.accessToken() : config.accessToken);
     const requestOptions = {
       ...options,
       baseUrl: config.apiUrl,
       fetch: config.fetch,
-      headers: { ...defaultHeaders, Authorization: `Bearer ${credential}` },
+      headers: { ...defaultHeaders, Authorization: `Bearer ${accessToken}` },
       responseStyle: 'fields',
       throwOnError: false,
     } as RestOptions<TData, boolean>;

@@ -9,12 +9,12 @@ from typing import Any, Literal, TypedDict, Union
 from mesa_rest.types import UNSET, Unset
 
 
-class _SigningKeyAuthorRequired(TypedDict):
+class _AuthorRequired(TypedDict):
     name: str
 
 
-class SigningKeyAuthor(_SigningKeyAuthorRequired, total=False):
-    """Commit attribution carried by a signing-key access token.
+class Author(_AuthorRequired, total=False):
+    """Commit attribution for a commit-producing operation.
 
     ``name`` is required at runtime. ``email`` is optional and defaults to
     ``None``.
@@ -24,8 +24,8 @@ class SigningKeyAuthor(_SigningKeyAuthorRequired, total=False):
 
 
 @dataclass
-class Author:
-    """Commit author or committer identity."""
+class Committer:
+    """Committer identity for a change."""
 
     name: str
     email: str

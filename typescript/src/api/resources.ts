@@ -79,7 +79,7 @@ import {
 import { prettifyError } from 'zod';
 import { InvalidOptionsError, MesaWebhookVerificationError, MissingWebhookSecretError } from '../lib/errors.js';
 import { type WebhookEventName, WebhookEventSchema, type WebhookHandler } from '../webhooks/schemas.js';
-import { normalizeSigningKeyAuthors, type SigningKeyAuthorInput } from './access-token.js';
+import { normalizeAccessTokenAuthors, type Author } from './access-token.js';
 import type { RestClient } from './client.js';
 import { serializeRepoTagsFilter, type RepoTagFilter } from './repo-tag-filter.js';
 
@@ -90,10 +90,10 @@ function sign(secret: string, timestamp: number, rawBody: string): string {
   return createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
 }
 
-type NormalizedSigningKeyAuthors = ReturnType<typeof normalizeSigningKeyAuthors>;
+type NormalizedAccessTokenAuthors = ReturnType<typeof normalizeAccessTokenAuthors>;
 
 type RequestAttribution = {
-  sign: (authors: NormalizedSigningKeyAuthors) => string;
+  sign: (authors: NormalizedAccessTokenAuthors) => string;
 };
 
 type OrgRequestContext = {
@@ -131,7 +131,7 @@ export type BookmarksMergeInput = Omit<MergeBookmarkData['path'], 'org'> & Omit<
 
 type PrivateKeyCommitAuthors = {
   /** Ordered, nonempty commit attribution signed into this request's token. */
-  authors: NonEmptyReadonlyArray<SigningKeyAuthorInput>;
+  authors: NonEmptyReadonlyArray<Author>;
 };
 
 export type PrivateKeyBookmarksMergeInput = BookmarksMergeInput & PrivateKeyCommitAuthors;
@@ -219,7 +219,7 @@ function prepareCommitRequest(
   input: Record<string, unknown>,
   requestAttribution: RequestAttribution,
   preserveExistingAuthors = false
-): { body: Record<string, unknown>; credential?: string } {
+): { body: Record<string, unknown>; accessToken?: string } {
   const { author, authors } = input as RuntimeAttributionInput;
   const hasAuthor = author !== undefined;
   const hasAuthors = authors !== undefined;
@@ -240,8 +240,8 @@ function prepareCommitRequest(
     throw new InvalidOptionsError('Private-key commit operations require a nonempty `authors` option.');
   }
 
-  const normalizedAuthors = normalizeSigningKeyAuthors(authors as readonly SigningKeyAuthorInput[]);
-  return { body, credential: requestAttribution.sign(normalizedAuthors) };
+  const normalizedAuthors = normalizeAccessTokenAuthors(authors as readonly Author[]);
+  return { body, accessToken: requestAttribution.sign(normalizedAuthors) };
 }
 
 export function createApiResources({ restClient, orgSlug: org, webhookSecret, requestAttribution }: OrgRequestContext) {
@@ -339,7 +339,7 @@ export function createApiResources({ restClient, orgSlug: org, webhookSecret, re
             path: { org, repo },
             body: prepared.body as MergeBookmarkData['body'],
           },
-          prepared.credential
+          prepared.accessToken
         );
       },
     },
@@ -358,7 +358,7 @@ export function createApiResources({ restClient, orgSlug: org, webhookSecret, re
         const response = await restClient.request<CreateChangeData, CreateChangeResponse>(
           createChange,
           { path: { org, repo }, body: prepared.body as CreateChangeData['body'] },
-          prepared.credential
+          prepared.accessToken
         );
         return removeLegacyAuthor(response);
       },
@@ -379,7 +379,7 @@ export function createApiResources({ restClient, orgSlug: org, webhookSecret, re
             path: { org, repo, change_id: changeId },
             body: prepared.body as UpdateChangeData['body'],
           },
-          prepared.credential
+          prepared.accessToken
         );
         return removeLegacyAuthor(response);
       },

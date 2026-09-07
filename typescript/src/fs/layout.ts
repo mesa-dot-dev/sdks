@@ -1,8 +1,8 @@
 /**
  * Mount-layout constructors.
  *
- * `repo()` and `createLayout()` build the serializable layout schema
- * (`LayoutSpec`) shared with the CLI and the Python SDK. The authoritative
+ * `repo()` builds declarations for the serializable layout schema shared with
+ * the CLI and the Python SDK. The authoritative
  * normalization — path expansion, collision, organization scope, and
  * repository-uniqueness semantics — lives in core Rust
  * (`mesafs-core::layout`); this module only performs cheap, early checks
@@ -39,7 +39,7 @@ export type BranchedRevision = RevisionIdentifier & {
 
 /** Options for one repository declaration. */
 export type RepoOptions = {
-  /** Read-only or read-write presentation. Always explicit. */
+  /** Read-only or read-write access mode. Always explicit. */
   mode: MountMode;
   /** Child-directory name override. Only valid on array elements. */
   alias?: string;
@@ -60,7 +60,7 @@ export type RepoOptions = {
 );
 
 /**
- * One repository declaration in serialized `LayoutSpec` form. Produced by
+ * One repository declaration in serialized layout form. Produced by
  * {@link repo}; do not construct by hand.
  */
 export type Repo = {
@@ -87,25 +87,15 @@ export type Repo = {
 
 /**
  * The mount-layout schema: a pure path map. Every key is an absolute
- * (`/`-prefixed) namespace path — the compiler rejects non-absolute keys in
+ * (`/`-prefixed) layout path — the compiler rejects non-absolute keys in
  * object literals, and pre-typed records with a stray non-absolute key fail
  * the early runtime check. The organization is not part of the document. The
- * client or CLI credential provides the mount context, which keeps the layout
+ * client or CLI access token provides the mount context, which keeps the layout
  * file portable.
  */
-export type LayoutSpec = {
+export type Layout = {
   [path: `/${string}`]: Repo | Repo[];
 };
-
-/** A serializable layout value for `mesa mount --layout` and future mounts. */
-export interface Layout {
-  /** The layout in canonical `LayoutSpec` form. */
-  readonly spec: LayoutSpec;
-  /** Serialize as deterministic, pretty-printed JSON (for `layout.json`). */
-  toString(): string;
-  /** The canonical `LayoutSpec`, for `JSON.stringify` interoperability. */
-  toJSON(): LayoutSpec;
-}
 
 /**
  * Declare one repository mount.
@@ -180,47 +170,4 @@ export function repo(selector: RepoSelectorInput, options: RepoOptions): Repo {
     ...(options.at !== undefined && { at: { ...options.at } }),
     ...nested,
   };
-}
-
-/**
- * Build a serializable mount layout.
- *
- * The returned value is local; it does not create a server-stored resource.
- * Its string form deserializes as the core `LayoutSpec` consumed by
- * `mesa mount --layout`. The document carries no organization. The client or
- * CLI credential provides the mount context used to resolve its selectors.
- */
-export function createLayout(paths: LayoutSpec): Layout {
-  // Pre-typed `Record<string, Repo | Repo[]>` values still assign to
-  // `LayoutSpec`, so keep the runtime absolute-path check for them.
-  for (const path of Object.keys(paths)) {
-    if (!path.startsWith('/')) {
-      throw new Error(`createLayout(): top-level path '${path}' must be absolute`);
-    }
-  }
-  const spec: LayoutSpec = { ...paths };
-  return {
-    spec,
-    toString: () => stableStringify(spec),
-    toJSON: () => spec,
-  };
-}
-
-/** Pretty-print with recursively sorted object keys for deterministic output. */
-function stableStringify(value: unknown): string {
-  return `${JSON.stringify(sortKeys(value), null, 2)}\n`;
-}
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(sortKeys);
-  }
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, entry]) => [key, sortKeys(entry)])
-    );
-  }
-  return value;
 }

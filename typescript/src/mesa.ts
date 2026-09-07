@@ -1,16 +1,12 @@
 import type { WhoamiResponse } from '@mesadev/rest';
-import {
-  normalizeSigningKeyAuthors,
-  signAutomaticPrivateKeyAccessToken,
-  type SigningKeyAuthorInput,
-} from './api/access-token.js';
+import { normalizeAccessTokenAuthors, signAutomaticPrivateKeyAccessToken, type Author } from './api/access-token.js';
 import { createRestClient, type RestClient } from './api/client.js';
 import { type ApiResources, createApiResources } from './api/resources.js';
 import { looksLikePrivateKey } from './api/credentials.js';
-import { parsePrivateKey, type PrivateKeyCredential } from './api/signing-key.js';
-import { createLayout, type Layout, type LayoutSpec, type Repo } from './fs/layout.js';
+import { parsePrivateKey, type PrivateKeyCredential } from './api/private-key.js';
+import { type Layout, type Repo } from './fs/layout.js';
 import { MesaFileSystem, type MesaFileSystemConfig, type TelemetryConfig } from './fs/mesa-file-system.js';
-import { InvalidApiUrlError, InvalidOptionsError, MissingCredentialError, OrgResolutionError } from './lib/errors.js';
+import { InvalidApiUrlError, InvalidOptionsError, MissingPrivateKeyError, OrgResolutionError } from './lib/errors.js';
 
 const DEFAULT_API_URL = 'https://api.mesa.dev/v1';
 const PRIVATE_KEY_ENV_VAR = 'MESA_PRIVATE_KEY';
@@ -56,16 +52,13 @@ function resolvePrivateKey(privateKey: string | undefined): PrivateKeyCredential
   if (environmentPrivateKey !== undefined) {
     return parsePrivateKey(environmentPrivateKey);
   }
-  throw new MissingCredentialError('Missing credential. Pass a private key or set `MESA_PRIVATE_KEY`.');
+  throw new MissingPrivateKeyError('Missing private key. Pass a private key or set `MESA_PRIVATE_KEY`.');
 }
 
-/** Commit attribution carried by a layout-scoped access token. */
-export type FsLayoutAuthor = SigningKeyAuthorInput;
-
-type PrivateKeyAuthors = readonly [FsLayoutAuthor, ...FsLayoutAuthor[]];
+type PrivateKeyAuthors = readonly [Author, ...Author[]];
 
 export interface MesaOptions {
-  /** Organization-root Ed25519 private key used to sign request and filesystem credentials locally. */
+  /** Organization-root Ed25519 private key used to sign request and filesystem access tokens locally. */
   privateKey?: string;
   apiUrl?: string;
   fetch?: typeof globalThis.fetch;
@@ -83,13 +76,13 @@ export interface FsMountRuntimeOptions {
 
 /**
  * A layout definition bundle produced by calling `mesa.fs({ layout, ttl })`:
- * the prepared layout plus its scoped operations. The definition is the only
+ * the snapshotted layout plus its scoped operations. The definition is the only
  * way to mount a layout or mint its token; its `ttl` is the lifetime of
  * every token minted from it, whether by `token()` or under the hood by
  * `mount()`.
  */
 export interface FilesystemDefinition {
-  /** The prepared layout, built from the raw path map the definition was given. */
+  /** An independent plain-object snapshot of the validated layout. */
   layout(): Layout;
   /**
    * Mount this layout as the complete namespace, accepting the non-token
@@ -112,7 +105,7 @@ export type AccessToken = {
 };
 
 type FsLayoutOptions = {
-  layout: LayoutSpec;
+  layout: Layout;
   /**
    * Lifetime of every token the definition mints, in seconds. Defaults to
    * 15 minutes and allows up to four hours. There is no refresh; once the
@@ -122,7 +115,7 @@ type FsLayoutOptions = {
   authors: PrivateKeyAuthors;
 };
 type RuntimeFsLayoutOptions = {
-  layout: LayoutSpec;
+  layout: Layout;
   ttl?: number;
   authors?: PrivateKeyAuthors;
 };
@@ -163,7 +156,7 @@ export class Mesa {
       throw new InvalidOptionsError('User-agent metadata must not contain Mesa private key material.');
     }
     this.restClient = createRestClient({
-      credential: () => signAutomaticPrivateKeyAccessToken({ privateKey: credential, admin: true }).token,
+      accessToken: () => signAutomaticPrivateKeyAccessToken({ privateKey: credential, admin: true }).token,
       apiUrl: this.apiUrl,
       fetch: options.fetch,
       userAgent: options.userAgent,
@@ -227,7 +220,7 @@ export class Mesa {
       }
       const { layout, org, access } = this.deriveLayoutTokenRequest(definitionLayout, 'mesa.fs({ layout }).mount()');
       // Mint a single access token for the mount's whole lifetime. There is
-      // no refresh and no credential hot-swap, so when the token expires the
+      // no refresh and no access-token replacement, so when the token expires the
       // mount expires with it.
       const token = signAutomaticPrivateKeyAccessToken({
         privateKey: this.credential,
@@ -243,14 +236,23 @@ export class Mesa {
         // Catches untyped callers passing a bare path map instead of options.
         throw new InvalidOptionsError("mesa.fs() requires a 'layout'");
       }
-      const authors = authorsInput === undefined ? undefined : normalizeSigningKeyAuthors(authorsInput);
+      const authors = authorsInput === undefined ? undefined : normalizeAccessTokenAuthors(authorsInput);
       if (authors === undefined) {
         throw new InvalidOptionsError('Private-key layout definitions require a nonempty `authors` option.');
       }
       // Built eagerly, so an invalid record fails here at definition time.
-      const prepared = createLayout(layout);
+      // Pre-typed `Record<string, Repo | Repo[]>` values still assign to
+      // `Layout`, so keep the runtime absolute-path check for them.
+      for (const path of Object.keys(layout)) {
+        if (!path.startsWith('/')) {
+          throw new Error(`mesa.fs(): top-level path '${path}' must be absolute`);
+        }
+      }
+      const layoutJson = JSON.stringify(layout);
+      MesaFileSystem.validateLayout(layoutJson);
+      const prepared = JSON.parse(layoutJson) as Layout;
       const definition = {
-        layout: () => prepared,
+        layout: () => JSON.parse(layoutJson) as Layout,
         mount: (options: FsMountRuntimeOptions = {}) => mountLayout(prepared, ttl, authors, options),
         token: () => mintLayoutToken(prepared, ttl, authors),
       };
@@ -262,12 +264,12 @@ export class Mesa {
   private createFs(
     org: string,
     fsOptions: FsMountRuntimeOptions,
-    credential: string,
+    accessToken: string,
     layout: Layout
   ): Promise<MesaFileSystem> {
     const config: MesaFileSystemConfig = {
       org,
-      credential,
+      accessToken,
       cache: fsOptions.cache,
       apiBaseUrl: this.apiUrl,
       telemetry: fsOptions.telemetry,
@@ -302,17 +304,11 @@ export class Mesa {
         }
       }
     };
-    // The spec is a pure path map: every key is a declaration entry.
-    visit(layout.spec as Record<string, Repo | Repo[]>);
+    // The layout is a pure path map: every key is a declaration entry.
+    visit(layout as Record<string, Repo | Repo[]>);
     if (declarations.length === 0) {
       throw new InvalidOptionsError(`${caller} requires at least one layout repository`);
     }
-    // Run the core structural validator before any token is minted or signed,
-    // for token() and mount() alike, so a malformed layout fails here with
-    // the mount's own error. Repository names resolve only at mount time; a
-    // layout naming a nonexistent repository still derives a request and
-    // fails at mount.
-    MesaFileSystem.validateLayout(layout.toString());
     // Repository names are user-controlled. A null prototype keeps a valid
     // repository named `__proto__` from invoking Object's legacy setter.
     const access = Object.create(null) as Record<string, 'read-repo' | 'write-repo'>;

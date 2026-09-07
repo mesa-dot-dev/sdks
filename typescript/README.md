@@ -55,7 +55,7 @@ const definition = mesa.fs({
 });
 
 const { token } = await definition.token();
-const layoutJson = definition.layout().toString();
+const layoutJson = JSON.stringify(definition.layout(), null, 2);
 ```
 
 Write `layoutJson` to `layout.json` in the receiving environment, set `MESA_ACCESS_TOKEN` to `token`, and run `mesa mount --layout=layout.json`. A `ro` layout declaration grants `read-repo`; `rw` grants `write-repo`. Repositories outside the layout are not accessible.

@@ -1,9 +1,9 @@
 /**
- * Local access-token signing for Ed25519 signing private keys. Tokens are
+ * Local access-token signing for Ed25519 private keys. Tokens are
  * produced entirely offline with no network round trip.
  *
  * This is the SDK-side counterpart to the server implementation in
- * `packages/core/src/auth/signing-key-access-token.ts`. JSON key order does not
+ * `packages/core/src/auth/access-token.ts`. JSON key order does not
  * affect verification.
  *
  * Implemented with `node:crypto` only so the published SDK retains Node 18
@@ -14,7 +14,7 @@ import { randomUUID, sign as signEd25519 } from 'node:crypto';
 import { z } from 'zod';
 import { InvalidOptionsError } from '../lib/errors.js';
 import { looksLikePrivateKey } from './credentials.js';
-import type { PrivateKeyCredential } from './signing-key.js';
+import type { PrivateKeyCredential } from './private-key.js';
 
 /** Audience claim: access tokens are only valid when presented to the Mesa API. */
 // Protocol values mirror packages/core/src/auth/constants.ts. The published SDK
@@ -22,11 +22,11 @@ import type { PrivateKeyCredential } from './signing-key.js';
 const ACCESS_TOKEN_AUD = 'mesa-api';
 /** JOSE `typ` header (RFC 9068 style) distinguishing access tokens. */
 const ACCESS_TOKEN_TYP = 'mesa-at+jwt';
-/** Default and maximum lifetimes accepted by the signing-key verifier. */
-const SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60; // 15 minutes
-const SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60; // 4 hours
-const MAX_SIGNING_KEY_AUTHORS = 100;
-const MAX_SIGNING_KEY_ACCESS_ENTRIES = 250;
+/** Default and maximum lifetimes accepted by the access-token verifier. */
+const ACCESS_TOKEN_DEFAULT_TTL_SECONDS = 15 * 60; // 15 minutes
+const ACCESS_TOKEN_MAX_TTL_SECONDS = 4 * 60 * 60; // 4 hours
+const MAX_ACCESS_TOKEN_AUTHORS = 100;
+const MAX_ACCESS_TOKEN_ACCESS_ENTRIES = 250;
 const REPOSITORY_NAME_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 const RESERVED_REPOSITORY_NAMES = new Set(['repo', 'repos', 'api-key', 'api-keys']);
 
@@ -37,7 +37,7 @@ function isValidRepositoryName(name: string): boolean {
   return !lowerName.endsWith('.git') && !RESERVED_REPOSITORY_NAMES.has(lowerName);
 }
 
-const signingKeyAuthorSchema = z.object({
+const accessTokenAuthorSchema = z.object({
   name: z
     .string()
     .trim()
@@ -62,7 +62,7 @@ const signingKeyAuthorSchema = z.object({
     .transform((email) => email || null),
 });
 
-const signingKeyAccessRepositorySchema = z
+const accessTokenAccessRepositorySchema = z
   .string()
   .refine((repo) => !looksLikePrivateKey(repo), {
     error: 'Token access repos must not contain Mesa private keys.',
@@ -70,9 +70,9 @@ const signingKeyAccessRepositorySchema = z
   .refine((repo) => isValidRepositoryName(repo), {
     error: 'Token access repos must be valid bare repository names.',
   });
-const signingKeyAccessLevelSchema = z.enum(['read-repo', 'write-repo']);
-type SigningKeyAccessLevel = z.output<typeof signingKeyAccessLevelSchema>;
-const signingKeyAccessSchema = z.unknown().transform((access, context) => {
+const accessTokenAccessLevelSchema = z.enum(['read-repo', 'write-repo']);
+type AccessTokenAccessLevel = z.output<typeof accessTokenAccessLevelSchema>;
+const accessTokenAccessSchema = z.unknown().transform((access, context) => {
   if (access === null || typeof access !== 'object' || Array.isArray(access)) {
     context.addIssue({ code: 'custom', message: 'Token access must be a repository permission map.' });
     return z.NEVER;
@@ -83,23 +83,23 @@ const signingKeyAccessSchema = z.unknown().transform((access, context) => {
     context.addIssue({ code: 'custom', message: 'Token access must include at least one repository.' });
     return z.NEVER;
   }
-  if (entries.length > MAX_SIGNING_KEY_ACCESS_ENTRIES) {
+  if (entries.length > MAX_ACCESS_TOKEN_ACCESS_ENTRIES) {
     context.addIssue({
       code: 'custom',
-      message: `Token access must include at most ${MAX_SIGNING_KEY_ACCESS_ENTRIES} repositories.`,
+      message: `Token access must include at most ${MAX_ACCESS_TOKEN_ACCESS_ENTRIES} repositories.`,
     });
     return z.NEVER;
   }
 
-  const parsedEntries: Array<[string, SigningKeyAccessLevel]> = [];
+  const parsedEntries: Array<[string, AccessTokenAccessLevel]> = [];
   for (const [repo, level] of entries) {
-    const parsedRepo = signingKeyAccessRepositorySchema.safeParse(repo);
+    const parsedRepo = accessTokenAccessRepositorySchema.safeParse(repo);
     if (!parsedRepo.success) {
       context.addIssue({ code: 'custom', path: [repo], message: parsedRepo.error.issues[0]!.message });
       continue;
     }
 
-    const parsedLevel = signingKeyAccessLevelSchema.safeParse(level);
+    const parsedLevel = accessTokenAccessLevelSchema.safeParse(level);
     if (!parsedLevel.success) {
       context.addIssue({ code: 'custom', path: [repo], message: parsedLevel.error.issues[0]!.message });
       continue;
@@ -110,36 +110,32 @@ const signingKeyAccessSchema = z.unknown().transform((access, context) => {
 
   return Object.fromEntries(parsedEntries);
 });
-type NormalizedSigningKeyAccess = z.output<typeof signingKeyAccessSchema>;
+type NormalizedAccessTokenAccess = z.output<typeof accessTokenAccessSchema>;
 
-const signingKeyAuthorsSchema = z
-  .array(signingKeyAuthorSchema)
+const accessTokenAuthorsSchema = z
+  .array(accessTokenAuthorSchema)
   .min(1, { error: 'At least one author is required.' })
-  .max(MAX_SIGNING_KEY_AUTHORS, { error: `At most ${MAX_SIGNING_KEY_AUTHORS} authors are allowed.` });
-const signingKeyTtlSchema = z
-  .int()
-  .min(1)
-  .max(SIGNING_KEY_ACCESS_TOKEN_MAX_TTL_SECONDS)
-  .default(SIGNING_KEY_ACCESS_TOKEN_DEFAULT_TTL_SECONDS);
+  .max(MAX_ACCESS_TOKEN_AUTHORS, { error: `At most ${MAX_ACCESS_TOKEN_AUTHORS} authors are allowed.` });
+const accessTokenTtlSchema = z.int().min(1).max(ACCESS_TOKEN_MAX_TTL_SECONDS).default(ACCESS_TOKEN_DEFAULT_TTL_SECONDS);
 
-export type SigningKeyAuthorInput = z.input<typeof signingKeyAuthorSchema>;
-type SigningKeyAccessInput = Readonly<Record<string, z.input<typeof signingKeyAccessLevelSchema>>>;
+export type Author = z.input<typeof accessTokenAuthorSchema>;
+type AccessTokenAccessInput = Readonly<Record<string, z.input<typeof accessTokenAccessLevelSchema>>>;
 
-export function normalizeSigningKeyAuthors(
-  authors: readonly SigningKeyAuthorInput[]
-): readonly [z.output<typeof signingKeyAuthorSchema>, ...z.output<typeof signingKeyAuthorSchema>[]] {
-  const parsed = signingKeyAuthorsSchema.safeParse(authors);
+export function normalizeAccessTokenAuthors(
+  authors: readonly Author[]
+): readonly [z.output<typeof accessTokenAuthorSchema>, ...z.output<typeof accessTokenAuthorSchema>[]] {
+  const parsed = accessTokenAuthorsSchema.safeParse(authors);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const path = issue?.path.length ? `.${issue.path.join('.')}` : '';
     throw new InvalidOptionsError(`Invalid authors${path}: ${issue?.message ?? 'invalid value'}`);
   }
 
-  return parsed.data as [z.output<typeof signingKeyAuthorSchema>, ...z.output<typeof signingKeyAuthorSchema>[]];
+  return parsed.data as [z.output<typeof accessTokenAuthorSchema>, ...z.output<typeof accessTokenAuthorSchema>[]];
 }
 
-function normalizeSigningKeyAccess(access: NormalizedSigningKeyAccess): NormalizedSigningKeyAccess {
-  const repos = new Map<string, { name: string; level: SigningKeyAccessLevel }>();
+function normalizeAccessTokenAccess(access: NormalizedAccessTokenAccess): NormalizedAccessTokenAccess {
+  const repos = new Map<string, { name: string; level: AccessTokenAccessLevel }>();
 
   for (const [repo, level] of Object.entries(access)) {
     const key = repo.toLowerCase();
@@ -152,16 +148,16 @@ function normalizeSigningKeyAccess(access: NormalizedSigningKeyAccess): Normaliz
   return Object.fromEntries([...repos.values()].map(({ name, level }) => [name, level]));
 }
 
-const automaticSigningKeyTokenInputSchema = z.union([
+const automaticAccessTokenInputSchema = z.union([
   z.strictObject({
-    authors: signingKeyAuthorsSchema.optional(),
+    authors: accessTokenAuthorsSchema.optional(),
     admin: z.literal(true),
-    ttlSeconds: signingKeyTtlSchema,
+    ttlSeconds: accessTokenTtlSchema,
   }),
   z.strictObject({
-    authors: signingKeyAuthorsSchema.optional(),
-    access: signingKeyAccessSchema,
-    ttlSeconds: signingKeyTtlSchema,
+    authors: accessTokenAuthorsSchema.optional(),
+    access: accessTokenAccessSchema,
+    ttlSeconds: accessTokenTtlSchema,
   }),
 ]);
 
@@ -175,9 +171,9 @@ type SignedPrivateKeyAccessToken = {
 
 type SignAutomaticPrivateKeyAccessTokenInput = {
   privateKey: PrivateKeyCredential;
-  authors?: readonly [SigningKeyAuthorInput, ...SigningKeyAuthorInput[]];
+  authors?: readonly [Author, ...Author[]];
   ttlSeconds?: number;
-} & ({ admin: true } | { access: SigningKeyAccessInput });
+} & ({ admin: true } | { access: AccessTokenAccessInput });
 
 function invalidTokenOptions(error: z.ZodError): InvalidOptionsError {
   const outerIssue = error.issues[0];
@@ -197,11 +193,11 @@ function base64UrlJson(value: object): string {
 
 function signPrivateKeyToken(
   privateKey: PrivateKeyCredential,
-  tokenInput: z.output<typeof automaticSigningKeyTokenInputSchema>
+  tokenInput: z.output<typeof automaticAccessTokenInputSchema>
 ): SignedPrivateKeyAccessToken {
   const { authors, ttlSeconds } = tokenInput;
   const authority =
-    'admin' in tokenInput ? { admin: true as const } : { access: normalizeSigningKeyAccess(tokenInput.access) };
+    'admin' in tokenInput ? { admin: true as const } : { access: normalizeAccessTokenAccess(tokenInput.access) };
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + ttlSeconds;
   const jti = randomUUID();
@@ -225,12 +221,12 @@ function signPrivateKeyToken(
   };
 }
 
-/** Sign an automatic request or MesaFS credential. */
+/** Sign an automatic request or MesaFS access token. */
 export function signAutomaticPrivateKeyAccessToken(
   input: SignAutomaticPrivateKeyAccessTokenInput
 ): SignedPrivateKeyAccessToken {
   const { privateKey, ...tokenInput } = input;
-  const parsed = automaticSigningKeyTokenInputSchema.safeParse(tokenInput);
+  const parsed = automaticAccessTokenInputSchema.safeParse(tokenInput);
   if (!parsed.success) {
     throw invalidTokenOptions(parsed.error);
   }
