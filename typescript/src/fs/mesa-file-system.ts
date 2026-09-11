@@ -2,6 +2,7 @@ import {
   Bash,
   type BashOptions,
   type BufferEncoding,
+  type CommandContext,
   type CpOptions,
   type FileContent,
   type FsStat,
@@ -21,6 +22,7 @@ import type {
 } from './native-loader.js';
 import { loadNativeAddon } from './native-loader.js';
 import { type BranchedRevision, type Layout, type RevisionIdentifier } from './layout.js';
+import { createSearchRg, type ServerSearchConfig } from './search-rg.js';
 
 export interface ChangeResult {
   /** Reverse-hex-encoded change ID of the now-active change (JJ format, lowercase letters `k`–`z`). */
@@ -178,7 +180,19 @@ export interface LogRecord {
   fields: Record<string, unknown>;
 }
 
-export type MesaBashOptions = Pick<
+/** Single-quote a word so the fallback interpreter sees it unchanged. */
+function shellQuote(word: string): string {
+  return `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+export type MesaBashOptions = {
+  /**
+   * Answer `rg` with a repository search next to the storage instead of
+   * walking the mount. Commands the search cannot answer exactly fall through
+   * to the built-in `rg`, so this changes performance rather than results.
+   */
+  serverSideSearch?: boolean;
+} & Pick<
   BashOptions,
   | 'env'
   | 'cwd'
@@ -322,9 +336,16 @@ export class MesaFileSystemSubscription {
  */
 export class MesaFileSystem implements IFileSystem {
   private native: NativeMesaFileSystem;
+  /**
+   * What a server-side search needs, kept from the mount config. Absent when
+   * the mount was opened without an API base URL, which is the only case that
+   * cannot reach the search endpoint.
+   */
+  private readonly search: Omit<ServerSearchConfig, 'fetch'> | undefined;
 
-  private constructor(nativeInstance: NativeMesaFileSystem) {
+  private constructor(nativeInstance: NativeMesaFileSystem, search: Omit<ServerSearchConfig, 'fetch'> | undefined) {
     this.native = nativeInstance;
+    this.search = search;
   }
 
   /**
@@ -377,7 +398,10 @@ export class MesaFileSystem implements IFileSystem {
     // Registered after construction rather than passed into it: the native
     // factory's future must be Send, and a JS function is bound to its thread.
     if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
-    return new MesaFileSystem(nativeInstance);
+    const search = config.apiBaseUrl
+      ? { apiBaseUrl: config.apiBaseUrl, org: config.org, accessToken, layout: config.layout }
+      : undefined;
+    return new MesaFileSystem(nativeInstance, search);
   }
 
   async readFile(path: string, options?: { encoding?: BufferEncoding | null } | BufferEncoding): Promise<string> {
@@ -573,6 +597,22 @@ export class MesaFileSystem implements IFileSystem {
   };
 
   bash(options?: MesaBashOptions): Bash {
-    return new Bash({ ...options, cwd: options?.cwd ?? '/', fs: this });
+    const { serverSideSearch, ...bashOptions } = options ?? {};
+    const base = { ...bashOptions, cwd: options?.cwd ?? '/', fs: this as IFileSystem };
+    if (!serverSideSearch || !this.search) {
+      return new Bash(base);
+    }
+    // The built-in `rg` is not exported, so the fallback runs the original
+    // command line through a second interpreter that has no override. Built
+    // once, on the first command that needs it.
+    let builtIn: Bash | undefined;
+    const fallback = async (args: string[], ctx: CommandContext) => {
+      builtIn ??= new Bash({ ...bashOptions, cwd: ctx.cwd, fs: this as IFileSystem, customCommands: undefined });
+      return builtIn.exec(['rg', ...args].map(shellQuote).join(' '));
+    };
+    return new Bash({
+      ...base,
+      customCommands: [...(bashOptions.customCommands ?? []), createSearchRg({ ...this.search }, fallback)],
+    });
   }
 }
