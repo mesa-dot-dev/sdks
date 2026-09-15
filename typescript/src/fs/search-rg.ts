@@ -20,7 +20,7 @@ import type { Command, CommandContext, ExecResult } from 'just-bash';
 import type { Layout, Repo } from './layout.js';
 
 /** One repository as it appears in the mount namespace. */
-type Mount = {
+export type Mount = {
   /** Absolute path in the mount where this repository's root sits. */
   path: string;
   repo: string;
@@ -29,7 +29,7 @@ type Mount = {
 };
 
 /** One repository's share of a search. */
-type SearchLeg = {
+export type SearchLeg = {
   mount: Mount;
   /** Repo-relative directory to search under. */
   pathPrefix: string;
@@ -49,13 +49,25 @@ type SearchQuery = {
    * come back repo-relative, so both are needed to put them back.
    */
   target: { typed: string; absolute: string };
+  hidden: boolean;
+  request: SearchRequest;
+};
+
+/**
+ * One search, in the endpoint's own vocabulary rather than any command's.
+ *
+ * `rg` and `grep` disagree about defaults — smart case against case-sensitive,
+ * Rust regex against a translated BRE — so each planner spells out what it
+ * means here and the request is sent as written.
+ */
+export type SearchRequest = {
   pattern: string;
   mode: 'lines' | 'count' | 'files';
-  caseMode?: 'sensitive' | 'insensitive' | 'smart';
+  caseMode: 'smart' | 'sensitive' | 'insensitive';
   literal: boolean;
   word: boolean;
-  hidden: boolean;
-  globs: string[];
+  includeGlobs: string[];
+  excludeGlobs: string[];
 };
 
 /**
@@ -65,10 +77,10 @@ type SearchQuery = {
  * layout with many nested repositories would otherwise let one `rg` fill the
  * queue by itself and stall every other caller.
  */
-const MAX_PARALLEL_LEGS = 4;
+export const MAX_PARALLEL_LEGS = 4;
 
 /** Why a command line could not be served, phrased for the reader of a log. */
-type Unservable = { unservable: string };
+export type Unservable = { unservable: string };
 
 export type ServerSearchConfig = {
   /** Versioned API root, e.g. `https://api.mesa.dev/v1`. */
@@ -118,7 +130,7 @@ function joinPath(base: string, segment: string): string {
 }
 
 /** Absolute form of a path as typed on the command line. */
-function absolute(cwd: string, path: string): string {
+export function absolute(cwd: string, path: string): string {
   if (path.startsWith('/')) return path.replace(/\/+$/, '') || '/';
   const base = cwd.replace(/\/+$/, '');
   const joined = path === '.' || path === '' ? base : `${base}/${path}`;
@@ -139,7 +151,7 @@ function isUnder(child: string, parent: string): boolean {
   return parent === '/' ? child !== '/' : child.startsWith(`${parent}/`);
 }
 
-function resolveLegs(target: string, mounts: Mount[]): SearchLeg[] | Unservable {
+export function resolveLegs(target: string, mounts: Mount[]): SearchLeg[] | Unservable {
   const owner = mounts.find((mount) => target === mount.path || isUnder(target, mount.path));
   // A target above every mount — the namespace root, most obviously — belongs
   // to no repository but still covers several, so it yields a leg for each
@@ -166,11 +178,14 @@ function resolveLegs(target: string, mounts: Mount[]): SearchLeg[] | Unservable 
  * approximating, because a flag that silently does nothing changes the answer.
  */
 export function planSearch(args: string[], cwd: string, mounts: Mount[]): SearchQuery | Unservable {
+  args = expandShortFlags(args, 'eg');
   let pattern: string | undefined;
   const targets: string[] = [];
   const globs: string[] = [];
-  let mode: SearchQuery['mode'] = 'lines';
-  let caseMode: SearchQuery['caseMode'];
+  let mode: SearchRequest['mode'] = 'lines';
+  // The built-in `rg` is smart-case by default, unlike ripgrep itself, and the
+  // served answer has to agree with the one the fallback would give.
+  let caseMode: SearchRequest['caseMode'] = 'smart';
   let literal = false;
   let word = false;
   let hidden = false;
@@ -249,17 +264,12 @@ export function planSearch(args: string[], cwd: string, mounts: Mount[]): Search
   return {
     legs,
     target: { typed, absolute: absoluteTarget },
-    pattern,
-    mode,
-    caseMode,
-    literal,
-    word,
     hidden,
-    globs,
+    request: { pattern, mode, caseMode, literal, word, includeGlobs: globs, excludeGlobs: [] },
   };
 }
 
-type SearchMatch = {
+export type SearchMatch = {
   path: string;
   line_count: number;
   lines: { line_number: number; text: string }[];
@@ -305,29 +315,56 @@ async function* searchEvents(
   if (last !== '') yield JSON.parse(last) as SearchEvent;
 }
 
-function buildUrl(
-  config: ServerSearchConfig,
-  query: SearchQuery,
-  leg: SearchLeg,
-  extraExcludes: string[] = []
-): string {
-  const params = new URLSearchParams({ q: query.pattern, mode: query.mode });
-  if (query.caseMode) params.set('case', query.caseMode);
-  if (query.literal) params.set('literal', 'true');
-  if (query.word) params.set('word', 'true');
+function buildUrl(config: ServerSearchConfig, request: SearchRequest, leg: SearchLeg): string {
+  const params = new URLSearchParams({ q: request.pattern, mode: request.mode });
+  params.set('case', request.caseMode);
+  if (request.literal) params.set('literal', 'true');
+  if (request.word) params.set('word', 'true');
   if (leg.pathPrefix) params.set('path', leg.pathPrefix);
-  for (const glob of query.globs) params.append('include', glob);
+  for (const glob of request.includeGlobs) params.append('include', glob);
   // Carve out what a nested mount covers, so the parent does not answer for
   // paths the namespace shows as the child's.
-  for (const exclude of [...leg.excludes, ...extraExcludes]) params.append('exclude', exclude);
+  for (const exclude of [...leg.excludes, ...request.excludeGlobs]) params.append('exclude', exclude);
   // A layout may pin either, and the server defaults to the repo's bookmark.
   if (leg.mount.changeId) params.set('change_id', leg.mount.changeId);
   else if (leg.mount.bookmark) params.set('bookmark', leg.mount.bookmark);
   return `${config.apiBaseUrl}/${config.org}/${leg.mount.repo}/search?${params}`;
 }
 
+/**
+ * Run one leg's search, yielding each matching file as its row arrives.
+ *
+ * Shared by both command overrides so there is a single place that knows how
+ * the endpoint is addressed and how its rows arrive.
+ */
+export async function* searchLeg(
+  config: ServerSearchConfig,
+  leg: SearchLeg,
+  request: SearchRequest
+): AsyncGenerator<SearchMatch> {
+  const doFetch = config.fetch ?? globalThis.fetch;
+  for await (const event of searchEvents(buildUrl(config, request, leg), config, doFetch)) {
+    if (event.type === 'match') yield event;
+  }
+}
+
+/**
+ * Whether the search target is a directory the endpoint can search under.
+ *
+ * The endpoint's path prefix names a directory, so a file operand or a missing
+ * path would come back empty where the built-in prints the file's matches or
+ * its own error. Either way the built-in has to answer.
+ */
+export async function isDirectory(ctx: CommandContext, path: string): Promise<boolean> {
+  try {
+    return (await ctx.fs.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+}
+
 /** The part of a path below the directory the caller named. */
-function belowTarget(absolutePath: string, target: { absolute: string }): string {
+export function belowTarget(absolutePath: string, target: { absolute: string }): string {
   return absolutePath.slice(target.absolute.length).replace(/^\/+/, '');
 }
 
@@ -338,7 +375,7 @@ function belowTarget(absolutePath: string, target: { absolute: string }): string
  * `/repo/sonnets/x.md`, and a bare `rg love` reports paths relative to the
  * working directory.
  */
-function displayPath(suffix: string, target: { typed: string }): string {
+export function displayPath(suffix: string, target: { typed: string }): string {
   if (target.typed === '.' || target.typed === '') return suffix;
   return `${target.typed.replace(/\/+$/, '')}/${suffix}`;
 }
@@ -434,8 +471,37 @@ async function ignoreExcludesFor(
   return gitignoreExcludes(files);
 }
 
+/**
+ * Split clustered short flags into separate ones.
+ *
+ * `-rn` means `-r -n`, which is how people actually type these commands. The
+ * built-in clusters boolean flags only — `-re PATTERN` is an error there rather
+ * than a pattern flag — so a cluster naming any flag that takes a value is left
+ * whole, and the built-in gets to reject it in its own words.
+ *
+ * `valueFlags` is the set of short flags that consume the next argument.
+ */
+export function expandShortFlags(args: string[], valueFlags: string): string[] {
+  const expanded: string[] = [];
+  for (const [index, arg] of args.entries()) {
+    if (arg === '--') {
+      // Everything past this point is positional, clusters included.
+      expanded.push(...args.slice(index));
+      return expanded;
+    }
+    const isCluster = arg.length > 2 && arg.startsWith('-') && !arg.startsWith('--');
+    const letters = isCluster ? arg.slice(1) : '';
+    if (isCluster && ![...letters].some((letter) => valueFlags.includes(letter))) {
+      expanded.push(...[...letters].map((letter) => `-${letter}`));
+      continue;
+    }
+    expanded.push(arg);
+  }
+  return expanded;
+}
+
 /** Run `work` over `items`, at most `limit` at a time, preserving input order. */
-async function mapBounded<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapBounded<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const runner = async () => {
@@ -460,10 +526,10 @@ async function mapBounded<T, R>(items: T[], limit: number, work: (item: T) => Pr
  * tidiness; `| sort` remains available to anyone who wants it.
  */
 function format(matches: { path: string; match: SearchMatch }[], query: SearchQuery): string {
-  if (query.mode === 'files') {
+  if (query.request.mode === 'files') {
     return matches.map(({ path }) => `${path}\n`).join('');
   }
-  if (query.mode === 'count') {
+  if (query.request.mode === 'count') {
     return matches.map(({ path, match }) => `${path}:${match.line_count}\n`).join('');
   }
   return matches
@@ -488,7 +554,7 @@ export function createSearchRg(
     name: 'rg',
     async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
       const plan = planSearch(args, ctx.cwd, mounts);
-      if ('unservable' in plan) {
+      if ('unservable' in plan || !(await isDirectory(ctx, plan.target.absolute))) {
         return fallback(args, ctx);
       }
 
@@ -510,11 +576,10 @@ export function createSearchRg(
           const kept: { path: string; match: SearchMatch }[] = [];
           // Rows are filtered and reshaped as they arrive, so a file the answer
           // will not mention is never held.
-          for await (const event of searchEvents(buildUrl(config, plan, leg, extra), config, doFetch)) {
-            if (event.type !== 'match') continue;
-            const suffix = belowTarget(`${root}/${event.path}`, plan.target);
+          for await (const match of searchLeg(config, leg, { ...plan.request, excludeGlobs: extra })) {
+            const suffix = belowTarget(`${root}/${match.path}`, plan.target);
             if (!plan.hidden && isHidden(suffix)) continue;
-            kept.push({ path: displayPath(suffix, plan.target), match: event });
+            kept.push({ path: displayPath(suffix, plan.target), match });
           }
           return kept;
         });

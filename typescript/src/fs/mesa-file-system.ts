@@ -22,6 +22,7 @@ import type {
 } from './native-loader.js';
 import { loadNativeAddon } from './native-loader.js';
 import { type BranchedRevision, type Layout, type RevisionIdentifier } from './layout.js';
+import { createSearchGrep } from './search-grep.js';
 import { createSearchRg, type ServerSearchConfig } from './search-rg.js';
 
 export interface ChangeResult {
@@ -602,17 +603,24 @@ export class MesaFileSystem implements IFileSystem {
     if (!serverSideSearch || !this.search) {
       return new Bash(base);
     }
-    // The built-in `rg` is not exported, so the fallback runs the original
-    // command line through a second interpreter that has no override. Built
-    // once, on the first command that needs it.
+    // The built-in commands are not exported, so a fallback runs the original
+    // command line through a second interpreter without the overrides. Built
+    // once, on the first command that needs it; the caller's directory and
+    // standard input travel with each call.
     let builtIn: Bash | undefined;
-    const fallback = async (args: string[], ctx: CommandContext) => {
-      builtIn ??= new Bash({ ...bashOptions, cwd: ctx.cwd, fs: this as IFileSystem, customCommands: undefined });
-      return builtIn.exec(['rg', ...args].map(shellQuote).join(' '));
+    const fallbackTo = (name: string) => async (args: string[], ctx: CommandContext) => {
+      builtIn ??= new Bash(base);
+      return builtIn.exec([name, ...args].map(shellQuote).join(' '), { cwd: ctx.cwd, stdin: ctx.stdin });
     };
+    const search = { ...this.search };
+    // The caller's own commands come last so a `grep` or `rg` of theirs wins.
     return new Bash({
       ...base,
-      customCommands: [...(bashOptions.customCommands ?? []), createSearchRg({ ...this.search }, fallback)],
+      customCommands: [
+        createSearchRg(search, fallbackTo('rg')),
+        createSearchGrep(search, fallbackTo('grep')),
+        ...(bashOptions.customCommands ?? []),
+      ],
     });
   }
 }

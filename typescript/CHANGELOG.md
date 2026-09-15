@@ -8,6 +8,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.48.1 - 2026-09-15
+
+### Added
+
+- Answer `grep` and `rg` with server side search capability
+
+### Fixed
+
+- Fix filesystem checkpoint on empty repositories by initializing the first change before saving and advancing bookmarks
+
 ## 0.48.0 - 2026-09-10
 
 ### Changed
