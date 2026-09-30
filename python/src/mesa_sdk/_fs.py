@@ -329,7 +329,7 @@ class ChangesOps:
     ) -> str:
         """Create a new change forked from a bookmark or existing change.
 
-        Returns the new change's hex ID. Raises :exc:`FileNotFoundError`
+        Returns the new change's hex ID. Raises :exc:`MesaBadInputError`
         if the source bookmark or change doesn't exist.
         """
         return await self._fs.new_change(
@@ -349,7 +349,7 @@ class ChangesOps:
         """Check out an existing bookmark or change. Never creates a new one.
 
         Returns the now-active change's hex ID. Raises
-        :exc:`FileNotFoundError` if the bookmark or change doesn't exist.
+        :exc:`MesaBadInputError` if the bookmark or change doesn't exist.
         """
         return await self._fs.edit_change(repo, bookmark=bookmark, change_id=change_id)
 
@@ -387,7 +387,7 @@ class BookmarksOps:
     async def create(self, repo: str, name: str) -> None:
         """Create a bookmark at the active change's commit.
 
-        Raises :exc:`FileExistsError` if ``name`` already exists.
+        Raises :exc:`MesaBadInputError` if ``name`` already exists.
         """
         return await self._fs.create_bookmark(repo, name)
 
@@ -420,9 +420,9 @@ class MesaFileSystem:
 
     Construct via :meth:`mesa.fs(layout=...).mount() <FilesystemDefinition.mount>`.
 
-    Filesystem errors raise Python's built-in exceptions
-    (:exc:`FileNotFoundError`, :exc:`IsADirectoryError`,
-    :exc:`PermissionError`, etc.).
+    Classified native failures raise :exc:`MesaTransientError`,
+    :exc:`MesaBadInputError`, or :exc:`MesaFatalError`, all derived from
+    :exc:`MesaFileSystemError`. The original exception is in ``__cause__``.
     """
 
     changes: ChangesOps
@@ -458,7 +458,7 @@ class MesaFileSystem:
         """Replace the contents of ``path``. Creates the file if missing.
 
         Parent directory must exist, call :meth:`mkdir` with
-        ``recursive=True`` first if needed. Raises :exc:`OSError` on a
+        ``recursive=True`` first if needed. Raises :exc:`MesaBadInputError` on a
         read-only repo.
         """
         await self._native.write(path, content)
@@ -558,7 +558,7 @@ class MesaFileSystem:
         names (no namespace). A non-empty string value sets the key; ``None``
         or an empty string (``""``) deletes it. Existing keys not in ``entries``
         are left untouched; a single call may mix sets and deletes. ``org`` /
-        ``repo`` are reserved and raise ``ValueError`` if named.
+        ``repo`` are reserved and raise ``MesaBadInputError`` if named.
         """
         await self._native.set_metadata(path, entries)
 

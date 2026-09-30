@@ -28,7 +28,7 @@ def _uninstall_crash_handler() -> None: ...
 def validate_layout(layout_json: str) -> None:
     """Validate a serialized layout document against the core mount schema.
 
-    Structural rules only: raises :exc:`ValueError` with the exact error a
+    Structural rules only: raises :exc:`MesaBadInputError` with the exact error a
     mount would report for a structurally invalid document. Repository
     names are not resolved here.
     """

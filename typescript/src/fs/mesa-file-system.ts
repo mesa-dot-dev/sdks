@@ -10,8 +10,9 @@ import {
   type MkdirOptions,
   type RmOptions,
 } from 'just-bash';
+import { types } from 'node:util';
 import { looksLikePrivateKey } from '../api/credentials.js';
-import { InvalidOptionsError, MissingAccessTokenError } from '../lib/errors.js';
+import { classifyNativeError, InvalidOptionsError, MissingAccessTokenError } from '../lib/errors.js';
 import type {
   NativeMesaFileSystem,
   NativeMesaFileSystemWatcher,
@@ -329,6 +330,36 @@ export class MesaFileSystemSubscription {
 }
 
 /**
+ * Every native call goes through this proxy so structured addon errors become
+ * typed {@link MesaFileSystemError} instances.
+ */
+function classifyNativeErrors(native: NativeMesaFileSystem): NativeMesaFileSystem {
+  return new Proxy(native, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target) as unknown;
+      if (typeof value !== 'function') return value;
+      const method = value as (...args: unknown[]) => unknown;
+      return (...args: unknown[]) => {
+        let result: unknown;
+        try {
+          result = method.apply(target, args);
+        } catch (error) {
+          throw classifyNativeError(error);
+        }
+        // Realm-independent, like classifyNativeError: the addon's promises
+        // are not `instanceof Promise` inside a vm realm.
+        if (types.isPromise(result)) {
+          return result.catch((error: unknown) => {
+            throw classifyNativeError(error);
+          });
+        }
+        return result;
+      };
+    },
+  });
+}
+
+/**
  * Mesa-backed implementation of the just-bash IFileSystem interface.
  *
  * Uses native Rust code via NAPI to provide a high-performance filesystem
@@ -345,7 +376,7 @@ export class MesaFileSystem implements IFileSystem {
   private readonly search: Omit<ServerSearchConfig, 'fetch'> | undefined;
 
   private constructor(nativeInstance: NativeMesaFileSystem, search: Omit<ServerSearchConfig, 'fetch'> | undefined) {
-    this.native = nativeInstance;
+    this.native = classifyNativeErrors(nativeInstance);
     this.search = search;
   }
 
@@ -357,7 +388,11 @@ export class MesaFileSystem implements IFileSystem {
    */
   static validateLayout(layoutJson: string): void {
     nativeModule ??= loadNativeAddon();
-    nativeModule.validateLayout(layoutJson);
+    try {
+      nativeModule.validateLayout(layoutJson);
+    } catch (error) {
+      throw classifyNativeError(error);
+    }
   }
 
   /**
@@ -395,10 +430,17 @@ export class MesaFileSystem implements IFileSystem {
     };
 
     nativeModule ??= loadNativeAddon();
-    const nativeInstance = await nativeModule.MesaFileSystem.createAsync(napiConfig);
-    // Registered after construction rather than passed into it: the native
-    // factory's future must be Send, and a JS function is bound to its thread.
-    if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
+    // The instance proxy below only covers calls on a mounted filesystem, so
+    // mount-time failures (an expired token, an unknown repo) classify here.
+    let nativeInstance: NativeMesaFileSystem;
+    try {
+      nativeInstance = await nativeModule.MesaFileSystem.createAsync(napiConfig);
+      // Registered after construction because JS callbacks are bound to their
+      // thread and cannot be passed into the native factory's Send future.
+      if (onLog) nativeInstance.setLogCallback(onLog, napiConfig.telemetry?.logLevel);
+    } catch (error) {
+      throw classifyNativeError(error);
+    }
     const search = config.apiBaseUrl
       ? { apiBaseUrl: config.apiBaseUrl, org: config.org, accessToken, layout: config.layout }
       : undefined;

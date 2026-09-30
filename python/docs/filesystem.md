@@ -385,7 +385,7 @@ Create a bookmark at the current change's commit:
 await fs.bookmarks.create("my-repo", "feature-x")
 ```
 
-> `create` raises `FileExistsError` if the bookmark already exists.
+> `create` raises `MesaBadInputError` if the bookmark already exists.
 
 Merge and move operations are available through the REST API resource
 (`mesa.bookmarks.merge`, `mesa.bookmarks.move`), not through the filesystem
@@ -486,38 +486,59 @@ pipeline or a long-lived agent) and want to avoid re-fetching unchanged data.
 
 ## Error handling
 
-Filesystem operations raise standard Python exceptions, not `MesaError`:
+Native filesystem failures raise one of three subclasses of
+`MesaFileSystemError`, not `MesaError`:
+
+| Exception | When raised |
+|---|---|
+| `MesaTransientError` | A retry may succeed, such as after a concurrent bookmark move |
+| `MesaBadInputError` | Arguments, paths, credentials, or repository state must change first |
+| `MesaFatalError` | A Mesa bug or a failure the caller cannot fix; report it |
+
+These no longer inherit from built-in exceptions such as `OSError` or
+`FileNotFoundError`. The original built-in exception is available as
+`__cause__`, and its errno, when it has one, as `errno`:
 
 ```python
 import errno
 
+from mesa_sdk import MesaBadInputError
+
 try:
     data = await fs.read("/workspace/missing.txt")
-except FileNotFoundError:
-    print("file does not exist")
+except MesaBadInputError as exc:
+    if isinstance(exc.__cause__, FileNotFoundError):
+        print("file does not exist")
+    else:
+        raise
 
 try:
     await fs.mkdir("/workspace/existing-dir")
-except FileExistsError:
-    print("directory already exists")
+except MesaBadInputError as exc:
+    if isinstance(exc.__cause__, FileExistsError):
+        print("directory already exists")
+    else:
+        raise
 
 try:
     await fs.write("/workspace/file.txt", b"data")
-except OSError as exc:
+except MesaBadInputError as exc:
     if exc.errno == errno.EROFS:
         print("repo is read-only")
     else:
         raise
 ```
 
-| Exception | When raised |
+| `__cause__` | When raised |
 |---|---|
 | `FileNotFoundError` | Path does not exist |
-| `FileExistsError` | Path already exists (e.g., `mkdir` without `recursive`, duplicate bookmark) |
+| `FileExistsError` | Path already exists (e.g., `mkdir` without `recursive`) |
 | `IsADirectoryError` | Expected a file, got a directory |
 | `NotADirectoryError` | Expected a directory, got a file |
-| `OSError` | General I/O failure; read-only repos use the read-only filesystem errno |
-| `NotImplementedError` | `link()` (hard links not supported) |
+| `OSError` | Other I/O failures; read-only repos set `errno` to `EROFS` |
+
+Python-side argument validation raises `ValueError`, and `link()` raises
+`NotImplementedError` (hard links are not supported); neither is wrapped.
 
 ## Multiprocessing
 

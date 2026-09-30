@@ -1,19 +1,91 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Any
+from typing import Any, ClassVar, Literal
+
+ErrorClass = Literal["transient", "bad-input", "fatal"]
+"""How a caller should react to a failed filesystem operation.
+
+The same three classes drive the ``mesa`` CLI's exit codes and the
+TypeScript SDK's ``MesaFileSystemError.errorClass``.
+"""
+
+
+class MesaFileSystemError(Exception):
+    """Base for classified filesystem failures.
+
+    Catch MesaTransientError, MesaBadInputError, or MesaFatalError to
+    handle a recovery category, or this base to handle all three. The original
+    exception is available as ``__cause__`` and its errno as ``errno``.
+    """
+
+    error_class: ClassVar[ErrorClass | None] = None
+
+    def __init__(self, message: str, *, cause: Exception | None = None) -> None:
+        super().__init__(message)
+        # Assigning __cause__, even None, hides the exception being handled.
+        if cause is not None:
+            self.__cause__ = cause
+
+    @property
+    def errno(self) -> int | None:
+        # Read from __cause__ so `raise ... from oserror` also sets it.
+        cause = self.__cause__
+        return cause.errno if isinstance(cause, OSError) else None
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Exception's default reduction omits the original cause.
+        return (
+            _restore_filesystem_error,
+            (type(self), str(self), self.__cause__),
+            self.__dict__,
+        )
+
+
+def _restore_filesystem_error(
+    cls: type[MesaFileSystemError],
+    message: str,
+    cause: Exception | None,
+) -> MesaFileSystemError:
+    return cls(message, cause=cause)
+
+
+class MesaTransientError(MesaFileSystemError):
+    """The same filesystem operation may succeed on retry."""
+
+    error_class: ClassVar[ErrorClass] = "transient"
+
+
+class MesaBadInputError(MesaFileSystemError):
+    """The caller must change arguments, credentials, or state before retrying."""
+
+    error_class: ClassVar[ErrorClass] = "bad-input"
+
+
+class MesaFatalError(MesaFileSystemError):
+    """A Mesa bug or a failure the caller cannot fix; report it."""
+
+    error_class: ClassVar[ErrorClass] = "fatal"
+
+
+_FILESYSTEM_ERROR_TYPES: dict[ErrorClass, type[MesaFileSystemError]] = {
+    "transient": MesaTransientError,
+    "bad-input": MesaBadInputError,
+    "fatal": MesaFatalError,
+}
+
+
+def _filesystem_error(error_class: ErrorClass, cause: Exception) -> MesaFileSystemError:
+    return _FILESYSTEM_ERROR_TYPES[error_class](str(cause), cause=cause)
+
 
 
 class MesaError(Exception):
     """Base exception for SDK-layer errors: HTTP API failures, missing
     credentials, invalid URLs, and org resolution.
 
-    Errors raised by the native filesystem/bash surface (``MesaFileSystem``,
-    ``Bash``) use Python's built-in exception hierarchy instead —
-    ``FileNotFoundError``, ``FileExistsError``, ``IsADirectoryError``,
-    ``NotADirectoryError``, ``PermissionError``, ``ValueError``,
-    ``NotImplementedError``, ``OSError``. Catch those directly rather than
-    ``MesaError``.
+    Classified native filesystem failures inherit from ``MesaFileSystemError``.
+    Bash failures use built-in exceptions. Neither inherits from ``MesaError``.
     """
 
     code: str

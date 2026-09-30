@@ -173,7 +173,7 @@ async with mesa.fs(
 
 ### Read-only Repos
 
-Pass `mode="ro"` to reject writes with `OSError: [Errno 30] Read-only file system`.
+Pass `mode="ro"` to reject writes with `MesaBadInputError` and `errno` set to `EROFS`.
 A single layout can mix read-only and writable repos.
 
 ```python
@@ -280,16 +280,25 @@ async with mesa.fs(
 
 ### Filesystem Errors
 
-Filesystem operations raise standard Python exceptions:
+Classified native filesystem failures raise subclasses of `MesaFileSystemError`:
 
 | Exception | Condition |
 |-----------|-----------|
-| `FileNotFoundError` | Path does not exist |
-| `FileExistsError` | Path already exists (e.g. `mkdir` without parents) |
-| `IsADirectoryError` | Expected a file, got a directory |
-| `NotADirectoryError` | Expected a directory, got a file |
-| `OSError` | General I/O failure; read-only repos use the read-only filesystem errno |
-| `NotImplementedError` | Operation not supported (e.g. `link`) |
+| `MesaTransientError` | A retry may succeed, such as after a concurrent bookmark move |
+| `MesaBadInputError` | Arguments, credentials, or state must change, such as a missing path or a read-only repository |
+| `MesaFatalError` | A Mesa bug or a failure the caller cannot fix; report it |
+
+Catch a category directly, or catch `MesaFileSystemError` for all three. Each error retains `error_class`, the original exception in `__cause__`, and `errno` when available. These exceptions no longer inherit from built-in errors such as `OSError` or `ValueError`; update handlers for native filesystem failures accordingly. Python-side validation and unsupported hard links keep their existing exceptions.
+
+```python
+from mesa_sdk import MesaTransientError
+
+try:
+    await fs.changes.checkpoint(repo)
+except MesaTransientError:
+    # Retry once; a second failure propagates to the caller.
+    await fs.changes.checkpoint(repo)
+```
 
 ### Low-Level REST Access
 

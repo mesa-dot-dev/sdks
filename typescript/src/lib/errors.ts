@@ -1,3 +1,5 @@
+import { types } from 'node:util';
+
 export type MesaErrorCode =
   | 'INVALID_API_URL'
   | 'INVALID_OPTIONS'
@@ -89,4 +91,89 @@ export class MissingWebhookSecretError extends MesaError {
     super('MISSING_WEBHOOK_SECRET', 'Missing webhook secret. Pass `webhookSecret` to the Mesa constructor.');
     this.name = 'MissingWebhookSecretError';
   }
+}
+
+/**
+ * How a caller should react to a failed filesystem operation. The same three
+ * classes drive the `mesa` CLI's exit codes and the Python SDK's
+ * `error_class`.
+ */
+export type MesaFileSystemErrorClass = 'transient' | 'bad-input' | 'fatal';
+
+/** A failure from the native filesystem, classified. */
+export class MesaFileSystemError extends Error {
+  readonly errorClass: MesaFileSystemErrorClass;
+  readonly code: string | undefined;
+
+  constructor(errorClass: MesaFileSystemErrorClass, message: string, options?: ErrorOptions & { code?: string }) {
+    super(message, options);
+    this.name = 'MesaFileSystemError';
+    this.errorClass = errorClass;
+    this.code = options?.code;
+  }
+}
+
+/** The same filesystem operation may succeed on retry. */
+export class MesaTransientError extends MesaFileSystemError {
+  constructor(message: string, options?: ErrorOptions & { code?: string }) {
+    super('transient', message, options);
+    this.name = 'MesaTransientError';
+  }
+}
+
+/** Arguments, credentials, or state must change before retrying. */
+export class MesaBadInputError extends MesaFileSystemError {
+  constructor(message: string, options?: ErrorOptions & { code?: string }) {
+    super('bad-input', message, options);
+    this.name = 'MesaBadInputError';
+  }
+}
+
+/** A Mesa bug or a failure the caller cannot fix; report it. */
+export class MesaFatalError extends MesaFileSystemError {
+  constructor(message: string, options?: ErrorOptions & { code?: string }) {
+    super('fatal', message, options);
+    this.name = 'MesaFatalError';
+  }
+}
+
+const FILESYSTEM_ERROR_TYPES = {
+  transient: MesaTransientError,
+  'bad-input': MesaBadInputError,
+  fatal: MesaFatalError,
+};
+
+const NATIVE_ARGUMENT_ERROR_CODES = new Set([
+  'InvalidArg',
+  'ObjectExpected',
+  'StringExpected',
+  'NameExpected',
+  'FunctionExpected',
+  'NumberExpected',
+  'BooleanExpected',
+  'ArrayExpected',
+  'BigintExpected',
+  'DateExpected',
+  'ArrayBufferExpected',
+  'DetachableArraybufferExpected',
+]);
+
+/**
+ * Turn the native addon's structured error into a {@link MesaFileSystemError}.
+ * Errors from other sources pass through unchanged.
+ */
+export function classifyNativeError(error: unknown): unknown {
+  // The addon's errors belong to Node's main realm, so `instanceof Error` is
+  // false when the SDK runs in a vm realm such as Jest's or vitest's vmThreads.
+  if (!types.isNativeError(error) || error instanceof MesaFileSystemError) return error;
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  // NAPI validates argument types before entering Rust, so those rejections
+  // carry argument status codes but never reach our structured conversion.
+  const errorClass =
+    'errorClass' in error ? error.errorClass : code && NATIVE_ARGUMENT_ERROR_CODES.has(code) ? 'bad-input' : undefined;
+  if (errorClass !== 'transient' && errorClass !== 'bad-input' && errorClass !== 'fatal') return error;
+  return new FILESYSTEM_ERROR_TYPES[errorClass](error.message, {
+    cause: error,
+    code,
+  });
 }
