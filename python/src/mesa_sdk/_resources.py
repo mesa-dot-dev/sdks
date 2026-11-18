@@ -621,11 +621,14 @@ class Repos:
         repo: str,
         direction: str,
         ref_globs: dict[str, str] | None = None,
+        conflict_mode: str | None = None,
     ) -> SyncUpstreamResponse201:
         """Sync the repository upstream."""
         body: dict[str, Any] = {"direction": direction}
         if ref_globs is not None:
             body["ref_globs"] = ref_globs
+        if conflict_mode is not None:
+            body["conflict_mode"] = conflict_mode
         resp = await sync_upstream.asyncio_detailed(
             self._org_slug,
             repo,

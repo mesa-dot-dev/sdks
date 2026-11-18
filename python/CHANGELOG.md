@@ -8,6 +8,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Common Changelog](https://common-changelog.org/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Add `conflict_mode` to `mesa.repos.sync_upstream(...)`. Pass `"target"` on a push sync to push branches and tags whose history contains unresolved conflicts with their existing commit SHAs. Sync responses and `sync.*` webhook payloads include `conflict_mode`
+
 ## 0.49.0 - 2026-09-29
 
 ### Changed

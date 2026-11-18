@@ -167,6 +167,7 @@ class _SyncBase(_WebhookModel):
     direction: Literal["pull", "push"]
     attempt: int | float
     ref_globs: _SyncRefGlobs
+    conflict_mode: Literal["skip", "target"]
     created_at: str
 
 

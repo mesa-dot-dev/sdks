@@ -126,6 +126,7 @@ const SyncBaseSchema = z.object({
     branches: z.string(),
     tags: z.string(),
   }),
+  conflict_mode: z.enum(['skip', 'target']),
 });
 
 // Per-ref outcome from one sync. Invariants:
